@@ -41,6 +41,9 @@ Rod Diameter: $(@bind rodDiameter Slider(0.1:0.1:2, default=2.0, show_value = tr
 Wheel Inertia: $(@bind wheelInertia NumberField(0.1:0.1:50, default=25.0)) g cm^2\
 Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=25.0)) g cm\
 Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=25.0)) g cm\
+#### Simulation
+Simulation Time: $(@bind simTime Slider(1:0.1:20, default=10.0, show_value=true)) s\
+Nutation Angle (To Hold): $(@bind nutationAngle Slider(0:0.1:70, default=30.0, show_value=true)) degrees \
 """
 
 # ╔═╡ 77d79145-70db-44e2-9f20-c0fd2e383ec7
@@ -48,7 +51,7 @@ md"""
 Probe Inertia: $(probeInertia = (1/6*probeMass*probeLength^2 + probeMass*rodLength^2)) g cm^2 \
 Axial Rod Inertia: $(axialInertia = 1/8 * rodMass * (rodDiameter)^2 + 1/6*probeMass*probeLength^2 + wheelInertia) g cm^2 \
 Transverse Rod Inertia: $(transverseInertia = 1/3*rodMass*rodLength^2 + probeInertia + wheelInertia) g cm^2\
-Center of Mass: $(rcm = (rodMass/2 + probeMass)*rodLength/(rodMass + probeMass)) cm
+Center of Mass: $(rcm = (rodMass/2 + probeMass)*rodLength/(rodMass + probeMass)) cm \
 """
 
 # ╔═╡ 179b51a6-05f8-4810-b68c-b330ff1de0e1
@@ -63,6 +66,48 @@ begin
 		b_perp = dampingTransverse*1e-5,
 		b_axial = dampingSpin*1e-5,
 	)
+	gyroCond = 2*sqrt(physics.I_T*(physics.M_total)*physics.g*physics.r_cm*cos(deg2rad(nutationAngle)))
+end
+
+# ╔═╡ 40d46ad9-23cf-4e53-a37b-d06615dd49a0
+begin
+	function GenerateReferenceVector(phys, sens, T_basis)
+		#using euler coordinates theta (nutation), phi (precession), gamma (spin)
+		#solve the steady precession, steady spin, at fixed nutation angle.
+		#with no damping, the angular momentum of the system would keep the rod at fixed nutation with gravity unable to overcome, meaning the transverse inputs can be set to zero and the coincident input gamma with rod gamma can be used for stabilization.
+
+		#the solution will yield a quadratic in phi, whose determinant describes the necessary velocity u_gamma and spin need to be at.
+
+		I_A = phys.I_A
+		I_T = phys.I_T
+		b_C = phys.b_axial
+		b_T = phys.b_perp
+		grav = phys.g
+		mass = phys.M_total
+		J_s = phys.J_s
+		m_rcm = phys.r_cm
+		
+		ω = [sens[1], sens[2], sens[3]]
+		Γ = [sens[4], sens[5], sens[6]]
+		u = [sens[7], sens[8], sens[9]]
+		cθ = cos(deg2rad(nutationAngle))
+		sθ = sin(deg2rad(nutationAngle))
+		h = hypot(Γ[1], Γ[2])
+	    ni, nj = h > 1e-3 ? (Γ[1]/h, Γ[2]/h) : (1.0, 0.0)
+		
+		#gamma axis angular momentum
+		H_γ = I_A*ω[3] + J_s*u[3]
+		u_γ_ref = u[3]
+		if H_γ >= 1.05*(gyroCond) || H_γ < 1.01*(gyroCond)
+			u_γ_ref = (gyroCond - I_A*ω[3])/J_s
+		end
+		ϕ_ref = (-H_γ - sqrt(H_γ^2 - 4*I_T*mass*grav*m_rcm*cθ))/(2*I_T*cθ)
+		Γref = [sθ*ni,sθ*nj,cθ]
+		t =T_basis'*Γref'
+		
+		ref = [ϕ_ref*Γref[1], ϕ_ref*Γref[2],ωγr,t[1],t[2],0.0,0.0,u_γ_ref]
+		return ref
+	end
 end
 
 # ╔═╡ affe95c5-4116-445b-9cd5-4b4f179e8d97
@@ -118,44 +163,15 @@ begin
 			  1 0 0; 
 			  0 1 0; 
 			  0 0 1]
-
-		return A, B
-	end
-end
-
-# ╔═╡ 40d46ad9-23cf-4e53-a37b-d06615dd49a0
-begin
-	function GenerateReferenceVector(phys, sens)
-		#using euler coordinates theta (nutation), phi (precession), gamma (spin)
-		#solve the steady precession, steady spin, at fixed nutation angle.
-		#with no damping, the angular momentum of the system would keep the rod at fixed nutation with gravity unable to overcome, meaning the transverse inputs can be set to zero and the coincident input gamma with rod gamma can be used for stabilization.
-
-		#the solution will yield a quadratic in phi, whose determinant describes the necessary velocity u_gamma and spin need to be at.
-
-		I_A = phys.I_A
-		I_T = phys.I_T
-		b_C = phys.b_axial
-		b_T = phys.b_perp
-		grav = phys.g
-		mass = phys.M_total
-		J_s = phys.J_s
-		rcm = phys.r_cm
-		
-		ω = [sens[1], sens[2], sens[3]]
-		Γ = [sens[4], sens[5], sens[6]]
-		u = [sens[7], sens[8], sens[9]]
-		
-		#gamma axis angular momentum
-		H_γ = I_A*
+		Χ_ref = GenerateReferenceVector(phys, sens, T)
+		return A, B, Χ_ref
 	end
 end
 
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
 begin
 	function Control_lqr(phys, sens)
-		
-		Χ_ref = GenerateReferenceVector(phys, sens)
-		A, B = GenerateStateSpace(phys, sens)
+		A, B, Χ_ref = GenerateStateSpace(phys, sens)
 		K = ControlSystemsBase.lqr(A, B, Q, R)
 		return output_i, output_j, output_γ
 	end
@@ -191,7 +207,8 @@ begin
 		sensor = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Ω_i, Ω_j, Ω_γ]
 		
 		#control law
-		dΩ_i, dΩ_j, dΩ_γ = p.ControlLaw(p.Physics, sensor)
+		dΩ = p.ControlLaw(p.Physics, sensor)
+		dΩ_i, dΩ_j, dΩ_γ = dΩ[1], dΩ[2], dΩ[3]
 		
 		#update	
 		MassMatrix = [p.Physics.I_T 0 0; 
@@ -230,8 +247,28 @@ begin
 end
 
 # ╔═╡ 768d624b-44a3-4053-8318-4c2ab32a0f7d
-begin 
-
+begin
+	u0 = [nutR, preR*sin(nutA), spinR + preR*cos(nutA), cos(nutA/2), sin(nutA/2), 0.0, 0.0, 0.0, 0.0, 0.0]
+	prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_lqr)
+	sol2 = DifferentialEquations.solve(
+		prob2, 
+		DifferentialEquations.AutoTsit5(DifferentialEquations.Rodas4P()), 
+		reltol=1e-8, 
+		abstol=1e-12,
+		maxiters=100_000_000, 
+	)
+	
+	timeValues2 = sol2.t
+	wisol2 = [sol2.u[i][1] for i in eachindex(sol2)] #rad/s
+	wjsol2   = [sol2.u[i][2] for i in eachindex(sol2)]
+	wgammasol2 = [sol2.u[i][3] for i in eachindex(sol2)]
+	q0sol2 = [sol2.u[i][4] for i in eachindex(sol2)]
+	q1sol2 = [sol2.u[i][5] for i in eachindex(sol2)]
+	q2sol2 = [sol2.u[i][6] for i in eachindex(sol2)]
+	q3sol2 = [sol2.u[i][7] for i in eachindex(sol2)]
+	uisol2 = [sol2.u[i][8] for i in eachindex(sol2)]
+	ujsol2 = [sol2.u[i][9] for i in eachindex(sol2)]
+	ugammasol2 = [sol2.u[i][10] for i in eachindex(sol2)]
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -1181,7 +1218,7 @@ version = "17.7.0+0"
 # ╠═77d79145-70db-44e2-9f20-c0fd2e383ec7
 # ╠═7b24588d-d6ba-415e-9cf1-e05fd4df864c
 # ╠═179b51a6-05f8-4810-b68c-b330ff1de0e1
-# ╟─affe95c5-4116-445b-9cd5-4b4f179e8d97
+# ╠═affe95c5-4116-445b-9cd5-4b4f179e8d97
 # ╠═40d46ad9-23cf-4e53-a37b-d06615dd49a0
 # ╠═bf736020-ddce-4045-bc8c-2072d4aad86c
 # ╠═7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
