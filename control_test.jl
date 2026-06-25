@@ -272,7 +272,7 @@ begin
 	prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_lqr)
 	sol = DifferentialEquations.solve(
 		prob, 
-		DifferentialEquations.AutoTsit5(DifferentialEquations.Rodas4P()), 
+		DifferentialEquations.Tsit5(), 
 		reltol=1e-8, 
 		abstol=1e-12,
 		maxiters=100_000_000, 
@@ -294,8 +294,9 @@ end
 # ╔═╡ 740dd046-59f9-419a-876d-ca0fd29624f5
 begin
 	θsol = [acos(q0^2 + q3^2 - q1^2 - q2^2) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	dϕsol = []
 	
-	pc1 = Plots.plot(timeValues, q0sol, legend = false, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
+	pc1 = Plots.plot(timeValues, ugammasol, legend = false, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
