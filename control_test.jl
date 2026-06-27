@@ -108,7 +108,7 @@ begin
 		H_γ = I_A*ω[3] + J_s*u[3]
 		H_γ_ref = H_γ
 		u_γ_ref = u[3]
-		if H_γ >= 1.05*(gyroCond) || H_γ < 1.01*(gyroCond)
+		if H_γ < 1.01*(gyroCond)
 			u_γ_ref = (gyroCond - I_A*ω[3])/J_s*1.025
 			H_γ_ref = I_A*ω[3] + J_s*u_γ_ref
 		end
@@ -183,19 +183,25 @@ end
 
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
 begin
-	function Control_lqr(phys, sens)
-		A, B, Χ_ref, augmentedState = GenerateStateSpace(phys, sens)
+	function PrecomputeLQRGain(phys)
+		cθ, sθ = cos(deg2rad(nutationAngle)), sin(deg2rad(nutationAngle))
+		uγ  = (gyroCond - phys.I_A*0)/phys.J_s*1.025
+    	Hγ  = phys.J_s*uγ
+		ϕ_dot = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
+		Γref = [sθ, 0.0, cθ]
+		ωref = ϕ_dot .* Γref .+ [0,0,-ϕ_dot*cθ]
+		
+		A, B, Χ_ref, augmentedState = GenerateStateSpace(phys,vcat(ωref, Γref, [0.0,0.0,uγ]))
 		
 		Q = LinearAlgebra.Diagonal([1, 1, 1, 1, 1, 1, 1, 1])
 		R = LinearAlgebra.Diagonal([1, 1, 1]) #bryson's rule
 		
 		K = ControlSystemsBase.lqr(A, B, Q, R)
-		command = -K*augmentedState'
-		return command[1], command[2], command[3]
+		return K
 	end
 	p_lqr = (
 		Physics = physics,
-		ControlLaw = (phys, sensor_vec) -> Control_lqr(phys, sensor_vec)
+		K = PrecomputeLQRGain(physics)
 	)
 end
 
@@ -212,6 +218,8 @@ begin
 end
 
 # ╔═╡ e29f87fb-503a-4bf7-ba49-d37950c2602b
+# ╠═╡ disabled = true
+#=╠═╡
 begin
 	function GyrostatPhysics!(du, u, p, t)
 		#populate data
@@ -252,7 +260,7 @@ begin
 		du[6] = (1/2)*(Skew4[3,1]*q0 + Skew4[3,2]*q1 + Skew4[3,3]*q2 + Skew4[3,4]*q3)
 		du[7] = (1/2)*(Skew4[4,1]*q0 + Skew4[4,2]*q1 + Skew4[4,3]*q2 + Skew4[4,4]*q3)
 
-		rhs = (GravityVector .- Beta .* [ω_i; ω_j; ω_γ] .- Skew3 * (MassMatrix * [ω_i; ω_j; ω_γ] .+ p.Physics.J_s.*[ω_i; ω_j; ω_γ]) .- p.Physics.J_s.*[dΩ_i; dΩ_j; dΩ_γ])
+		rhs = (GravityVector .- Beta .* [ω_i; ω_j; ω_γ] .- Skew3 * (MassMatrix * [ω_i; ω_j; ω_γ] .+ p.Physics.J_s.*[Ω_i; Ω_j; Ω_γ]) .- p.Physics.J_s.*[dΩ_i; dΩ_j; dΩ_γ])
 		
 		du[1] = rhs[1] / MassMatrix[1,1]
 		du[2] = rhs[2] / MassMatrix[2,2]
@@ -263,8 +271,10 @@ begin
 		du[10] = dΩ_γ
 	end
 end
+  ╠═╡ =#
 
 # ╔═╡ 768d624b-44a3-4053-8318-4c2ab32a0f7d
+#=╠═╡
 begin
 	nutA = deg2rad(initNutAngle)
 	tspan = (0.0, simTime)
@@ -290,14 +300,17 @@ begin
 	ujsol = [sol.u[i][9] for i in eachindex(sol)]
 	ugammasol = [sol.u[i][10] for i in eachindex(sol)]
 end
+  ╠═╡ =#
 
 # ╔═╡ 740dd046-59f9-419a-876d-ca0fd29624f5
+#=╠═╡
 begin
 	θsol = [acos(q0^2 + q3^2 - q1^2 - q2^2) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
 	dϕsol = []
 	
 	pc1 = Plots.plot(timeValues, ugammasol, legend = false, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
 end
+  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
