@@ -68,7 +68,7 @@ begin
 		b_perp = dampingTransverse*1e-5,
 		b_axial = dampingSpin*1e-5,
 	)
-	gyroCond = 2*sqrt(physics.I_T*(physics.M_total)*physics.g*physics.r_cm*cos(deg2rad(nutationAngle)))
+	gyroCond(v) = 2*sqrt(physics.I_T*(physics.M_total)*physics.g*physics.r_cm*cos(deg2rad(v)))
 end
 
 # ╔═╡ 433128f6-11d5-49fd-b73a-ab45d45d347a
@@ -78,7 +78,87 @@ begin
 			-v[2] v[1] 0]
 end
 
+# ╔═╡ e272f348-a067-42ee-9a5b-42b383042bc3
+begin
+	function GenerateStateSpace(phys, curAngle)
+		I_A = phys.I_A
+		I_T = phys.I_T
+		b_C = phys.b_axial
+		b_T = phys.b_perp
+		grav = phys.g
+		mass = phys.M_total
+		J_s = phys.J_s
+		rcm = phys.r_cm
+
+		cθ, sθ = cos(deg2rad(curAngle)), sin(deg2rad(curAngle))
+		uγref  = (gyroCond(curAngle) - phys.I_A*0)/phys.J_s*1.025
+    	Hγ  = phys.J_s*uγref
+		ϕ_dot = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
+		Γref = [sθ, 0.0, cθ]
+		ωref = ϕ_dot .* Γref .+ [0,0,-ϕ_dot*cθ]
+		ref = vcat(ωref, Γref, [0.0,0.0,uγref])
+		
+		ω = [ref[1], ref[2], ref[3]]
+		Γ = [ref[4], ref[5], ref[6]]
+		u = [ref[7], ref[8], ref[9]]
+
+		#develop tangent basis vectors for plane
+	
+		a = abs(Γ[1]) < 0.975 ? [1.0, 0.0, 0.0] : [0.0, 1.0, 0.0] # choose v1 such that it can never be zero after gram schmidt.
+		v1 = LinearAlgebra.normalize(a .- LinearAlgebra.dot(a, Γ)*Γ)
+		v2 = LinearAlgebra.cross(Γ, v1) #v3 cross v1 equals v2 in rhr orthonormal
+		T = hcat(v1, v2)
+		F = hcat(v1, v2, Γ) #3x3 orthonormal matrix
+		
+		Im = [I_T 0 0; 
+			  0 I_T 0; 
+			  0 0 I_A]
+		
+		A_ωω = Im\([-b_T -I_A*ω[3]+I_T*ω[3]-J_s*u[3] -I_A*ω[2]+I_T*ω[2]+J_s*u[2];
+			   I_A*ω[3]-I_T*ω[3]+J_s*u[3] -b_T I_A*ω[1]-I_T*ω[1]-J_s*u[1];
+			   -J_s*u[2] J_s*u[1] -b_C])
+		
+		A_ωΓ = [0 mass*grav*rcm/I_T 0;
+			   -mass*grav*rcm/I_T 0 0;
+			   0 0 0]
+		
+		A_ωu = Im\(J_s*S(ω))
+		
+		A_Γω = S(Γ)
+		A_ΓΓ = (-S(ω))
+		A_Γu = [0 0 0;
+			    0 0 0;
+			 	0 0 0]
+		
+		A_uω = LinearAlgebra.zeros(3,3)
+		A_uΓ = LinearAlgebra.zeros(3,3)
+		A_uu = LinearAlgebra.zeros(3,3)
+		
+		#projected F into precession basis formulated by n,b,γ
+		A = [F'*A_ωω*F F'*A_ωΓ*T F'*A_ωu;
+			T'*A_Γω*F T'*A_ΓΓ*T T'*A_Γu;
+			A_uω*F A_uΓ*T A_uu]
+		
+		B_ω = [-J_s/I_T 0 0;
+			  0 -J_s/I_T 0;
+			  0 0 -J_s/I_A]
+		T_η = [0 0 0;
+			  0 0 0]
+		B_u = [1 0 0;
+			  0 1 0;
+			  0 0 1]
+		
+		B = [ F'*B_ω; # sign fix
+			  T_η;
+			  B_u]
+		return A, B, ref, F, T
+	end
+end
+
 # ╔═╡ 40d46ad9-23cf-4e53-a37b-d06615dd49a0
+# ╠═╡ disabled = true
+# ╠═╡ skip_as_script = true
+#=╠═╡
 begin
 	function GenerateReferenceVector(phys, sens, T_basis)
 		#using euler coordinates theta (nutation), phi (precession), gamma (spin)
@@ -112,18 +192,21 @@ begin
 			u_γ_ref = (gyroCond - I_A*ω[3])/J_s*1.025
 			H_γ_ref = I_A*ω[3] + J_s*u_γ_ref
 		end
-		ϕ_ref = (-H_γ_ref - sqrt(H_γ_ref^2 - 4*I_T*mass*grav*m_rcm*cθ))/(2*I_T*cθ)
+		ϕ_ref = (H_γ_ref - sqrt(H_γ_ref^2 - 4*I_T*mass*grav*m_rcm*cθ))/(2*I_T*cθ)
 		Γref = [sθ*ni,sθ*nj,cθ]
-		t =T_basis'*Γref
+		t = T_basis'*Γref
 		
 		ref = [ϕ_ref*Γref[1], ϕ_ref*Γref[2],0.0,t[1],t[2],0.0,0.0,u_γ_ref]
 		return ref
 	end
 end
+  ╠═╡ =#
 
 # ╔═╡ affe95c5-4116-445b-9cd5-4b4f179e8d97
+# ╠═╡ disabled = true
+#=╠═╡
 begin
-	function GenerateStateSpace(phys, sens)
+	function GenerateStateSpacexxx(phys, sens)
 		I_A = phys.I_A
 		I_T = phys.I_T
 		b_C = phys.b_axial
@@ -180,46 +263,53 @@ begin
 		return A, B, Χ_ref, augmentedState
 	end
 end
+  ╠═╡ =#
 
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
 begin
-	function PrecomputeLQRGain(phys)
-		cθ, sθ = cos(deg2rad(nutationAngle)), sin(deg2rad(nutationAngle))
-		uγ  = (gyroCond - phys.I_A*0)/phys.J_s*1.025
-    	Hγ  = phys.J_s*uγ
-		ϕ_dot = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
-		Γref = [sθ, 0.0, cθ]
-		ωref = ϕ_dot .* Γref .+ [0,0,-ϕ_dot*cθ]
-		
-		A, B, Χ_ref, augmentedState = GenerateStateSpace(phys,vcat(ωref, Γref, [0.0,0.0,uγ]))
+	function PrecomputeLQRGain(phys, nAngle)
+		A, B, Χ_ref, F, T = GenerateStateSpace(phys,nAngle)
 		
 		Q = LinearAlgebra.Diagonal([1, 1, 1, 1, 1, 1, 1, 1])
 		R = LinearAlgebra.Diagonal([1, 1, 1]) #bryson's rule
 		
 		K = ControlSystemsBase.lqr(A, B, Q, R)
-		return K
+		return K, Χ_ref, F, T
 	end
 	p_lqr = (
 		Physics = physics,
-		K = PrecomputeLQRGain(physics)
+		GainTuple = PrecomputeLQRGain(physics, nutationAngle)
 	)
+end
+
+# ╔═╡ dac310f6-3603-468a-b41d-b97dbcebca0a
+begin
+	function GetAugmentedError(sens, ref, F, T)
+		ω = sens[1:3]
+		Γ = sens[4:6]
+		u = sens[7:9]
+		
+		ωref = ref[1:3]
+		Γref = ref[4:6]
+		uref = ref[7:9]
+		δ = vcat(F' * (ω .- ωref), T' * (Γ .- Γref), u .- uref)
+		return δ
+	end
 end
 
 # ╔═╡ 7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
 begin
-	function Control_adrc(phys, ref, sens)
-		A, B = GenerateStateSpace(phys, sens)
-		return output_i, output_j, output_γ
+	itemToPlot = PrecomputeLQRGain(physics, 0)
+	maps = [Plots.heatmap(itemToPlot[1]')]
+	for i in 5:5:45
+		itemToPlot = PrecomputeLQRGain(physics, i)
+		m = Plots.heatmap(itemToPlot[1]')
+		push!(maps, m)
 	end
-	p_adrc = (
-		Physics = physics,
-		ControlLaw = (phys, sensor_vec) -> Control_adrc(phys, sensor_vec)
-	)
+	Plots.plot(maps..., layout=(5,4))
 end
 
 # ╔═╡ e29f87fb-503a-4bf7-ba49-d37950c2602b
-# ╠═╡ disabled = true
-#=╠═╡
 begin
 	function GyrostatPhysics!(du, u, p, t)
 		#populate data
@@ -233,7 +323,9 @@ begin
 		sensor = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
 		
 		#control law
-		dΩ = p.ControlLaw(p.Physics, sensor)
+		δx = GetAugmentedError(sensor, p.GainTuple[2], p.GainTuple[3], p.GainTuple[4])
+		δdΩ = -p.GainTuple[1]*δx
+		dΩ = du[8:10] .+ δdΩ
 		dΩ_i, dΩ_j, dΩ_γ = dΩ[1], dΩ[2], dΩ[3]
 		
 		#update	
@@ -271,10 +363,8 @@ begin
 		du[10] = dΩ_γ
 	end
 end
-  ╠═╡ =#
 
 # ╔═╡ 768d624b-44a3-4053-8318-4c2ab32a0f7d
-#=╠═╡
 begin
 	nutA = deg2rad(initNutAngle)
 	tspan = (0.0, simTime)
@@ -300,17 +390,14 @@ begin
 	ujsol = [sol.u[i][9] for i in eachindex(sol)]
 	ugammasol = [sol.u[i][10] for i in eachindex(sol)]
 end
-  ╠═╡ =#
 
 # ╔═╡ 740dd046-59f9-419a-876d-ca0fd29624f5
-#=╠═╡
 begin
 	θsol = [acos(q0^2 + q3^2 - q1^2 - q2^2) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
 	dϕsol = []
 	
 	pc1 = Plots.plot(timeValues, ugammasol, legend = false, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
 end
-  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3476,10 +3563,12 @@ version = "1.13.0+0"
 # ╠═7b24588d-d6ba-415e-9cf1-e05fd4df864c
 # ╠═179b51a6-05f8-4810-b68c-b330ff1de0e1
 # ╠═433128f6-11d5-49fd-b73a-ab45d45d347a
+# ╠═e272f348-a067-42ee-9a5b-42b383042bc3
 # ╠═affe95c5-4116-445b-9cd5-4b4f179e8d97
 # ╠═40d46ad9-23cf-4e53-a37b-d06615dd49a0
 # ╠═bf736020-ddce-4045-bc8c-2072d4aad86c
-# ╠═7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
+# ╠═dac310f6-3603-468a-b41d-b97dbcebca0a
+# ╟─7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
 # ╠═e29f87fb-503a-4bf7-ba49-d37950c2602b
 # ╠═768d624b-44a3-4053-8318-4c2ab32a0f7d
 # ╠═740dd046-59f9-419a-876d-ca0fd29624f5
