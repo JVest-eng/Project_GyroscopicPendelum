@@ -35,7 +35,7 @@ md"""
 #### Mechanical
 Rod Mass: $(@bind rodMass Slider(1:0.1:80, default=15.0, show_value=true)) g \
 Probe Mass: $(@bind probeMass Slider(1:0.1:100, default=50.0, show_value = true)) g \
-Probe Length: $(@bind probeLength Slider(0.1:0.1:3, default=1.0, show_value = true)) cm \
+Probe Length: $(@bind probeLength Slider(0.1:0.1:3, default=3.0, show_value = true)) cm \
 Rod Length: $(@bind rodLength Slider(1:0.1:30, default=15.0, show_value = true)) cm \
 Rod Diameter: $(@bind rodDiameter Slider(0.1:0.1:2, default=2.0, show_value = true)) cm \
 Wheel Inertia: $(@bind wheelInertia NumberField(0.1:0.1:50, default=25.0)) g cm^2\
@@ -46,7 +46,7 @@ Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=25
 Simulation Time: $(@bind simTime Slider(1:0.1:20, default=10.0, show_value=true)) s\
 Initial Nutation Angle: $(@bind initNutAngle Slider(0:0.1:70, default=0.0, show_value=true)) degrees \
 Animation Smoothness: $(@bind max_fps Slider(12:2:60, default=20, show_value = true)) fps \
-Nutation Angle (To Hold): $(@bind nutationAngle Slider(0:0.1:70, default=30.0, show_value=true)) degrees \
+Nutation Angle (To Hold): $(@bind nutationAngleToHold Slider(0:0.1:70, default=30.0, show_value=true)) degrees \
 """
 
 # ╔═╡ 77d79145-70db-44e2-9f20-c0fd2e383ec7
@@ -158,19 +158,43 @@ end
 
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
 begin
+	maxWheelSpeed = 8000*2*pi/60
+	maxPrecessionSpeed = 2*pi
+	maxSpinSpeed = 5000
+	maxWheelAccel = 500 #rad/s^2
 	function PrecomputeLQRGain(phys, nAngle)
 		A, B, Χ_ref, F, T = GenerateStateSpace(phys,nAngle)
-		
-		Q = LinearAlgebra.Diagonal([1, 1, 1, 1, 1, 0.5, 0.5, 1])
-		R = LinearAlgebra.Diagonal([1, 1, 1]) #bryson's rule
+		mQ = LinearAlgebra.zeros(8);
+		if nAngle > 1e-2
+			mQ = [1/(2*pi)^2,
+			1/(maxPrecessionSpeed*sin(deg2rad(nAngle)))^2,
+			1/(maxSpinSpeed + maxPrecessionSpeed*cos(deg2rad(nAngle)))^2,
+			1/0.005^2,
+			1/0.005^2,
+			1/(0.25*maxWheelSpeed)^2,
+			1/(0.25*maxWheelSpeed)^2,
+			1/(0.25*maxWheelSpeed)^2]
+		else
+			mQ = [1/(2*pi)^2,
+			0,
+			1/(maxSpinSpeed + maxPrecessionSpeed)^2,
+			1/0.005^2,
+			1/0.005^2,
+			1/(0.25*maxWheelSpeed)^2,
+			1/(0.25*maxWheelSpeed)^2,
+			1/(0.25*maxWheelSpeed)^2]
+		end
+		Q = LinearAlgebra.Diagonal(mQ) #fix for nutation angle zero.
+		R = LinearAlgebra.Diagonal([1/maxWheelAccel^2,1/maxWheelAccel^2,1/maxWheelAccel^2]) #bryson's rule
 		
 		K = ControlSystemsBase.lqr(A, B, Q, R)
 		return K, Χ_ref, F, T
 	end
 	p_lqr = (
 		Physics = physics,
-		GainTuple = PrecomputeLQRGain(physics, nutationAngle)
+		GainTuple = PrecomputeLQRGain(physics, nutationAngleToHold)
 	)
+	(gyroCond(deg2rad(nutationAngleToHold)) - physics.J_s*maxWheelSpeed)/physics.I_A
 end
 
 # ╔═╡ dac310f6-3603-468a-b41d-b97dbcebca0a
@@ -189,6 +213,8 @@ begin
 end
 
 # ╔═╡ 7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
+# ╠═╡ disabled = true
+#=╠═╡
 begin
 	itemToPlot = PrecomputeLQRGain(physics, 0)
 	maps = [Plots.heatmap(itemToPlot[1]')]
@@ -199,6 +225,7 @@ begin
 	end
 	Plots.plot(maps..., layout=(5,4))
 end
+  ╠═╡ =#
 
 # ╔═╡ e29f87fb-503a-4bf7-ba49-d37950c2602b
 begin
@@ -288,6 +315,10 @@ end
 begin
 	import DataStructures
 	pc1 = Plots.plot(timeValues, θsol, legend = false, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
+	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], color = :black)
+	
+	pc3 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
+	Plots.plot(pc1, pc3, layout = (2,1))
 end
 
 # ╔═╡ 1234dad7-3c75-4f40-8f80-f3601a41c891
@@ -297,23 +328,36 @@ begin
 				 2(x*y+w*z) 1-2(x^2+z^2) 2(y*z-w*x);
 				 2(x*z-w*y) 2(y*z+w*x) 1-2(x^2+y^2)]
 	function GetQuaternionAtIndex(index)
-		return WGLMakie.Quaternionf(q1sol[index],q2sol[index],q3sol[index],q0sol[index])
+		return WGLMakie.Quaternionf(-q1sol[index],-q2sol[index],-q3sol[index],q0sol[index])
 	end
 	function SetNextPose!(index, probeScene, rodScene)
 		newq = GetQuaternionAtIndex(index)
 		WGLMakie.rotate!(probeScene, newq)
 		WGLMakie.rotate!(rodScene, newq)
 	end
+	function SeekSlider!(indexToSeek, playbackIndexObs, syncLockRef, sliderObj) #functon used for updating the slider when the animation is playing
+		syncLockRef[] = true #lock object to guard
+		WGLMakie.set_close_to!(sliderObj, indexToSeek)
+		playbackIndexObs[] = indexToSeek
+		syncLockRef[] = false
+	end
+	function GetNearestValueAsIndex(val, mList) # assume sorted from least to greatest.
+		return clamp(searchsortedlast(mList, val), 1, length(mList))
+	end
 end
 
 # ╔═╡ e3dffecc-a47b-4539-8ff6-ad53de12e602
-let
+begin
 	m_rodLength = rodLength
 
 	#parameters
 	playbackIndex = WGLMakie.Observable(1)
 	playbackIsRunning = WGLMakie.Observable(false)
+	playbackToken = Ref(0) #for pluto cooperation.
+	curPlaybackToken = 0
+	syncLockRef = Ref(false) #for guarding when we change slider value manually
 	fps = max_fps
+	endTimeIndex = length(timeValues)
 	
 	#we are trying to listen for a play button, a pause button, a reset button
 	#we are updating a 3d plot
@@ -323,13 +367,16 @@ let
 	probeDimensions = WGLMakie.Vec3f(probeLength)
 	myScene = WGLMakie.Axis3(fig[1,1], aspect= (1,1,1), title = "aspect = (1,1,1)",  limits = (-15,15,-15,15,-15,25))
 
+	# side view scene for observing nutation angle
+	#myScene2 = WGLMakie.Axis3(fig[1,1], aspect= (1,1,1), title = "aspect = (1,1,1)",  limits = (-15,15,-15,15,-15,25))
+
 	#create mesh objects @ positions
 	probeMesh = GeometryBasics.Rect3f(rodEnd .- probeDimensions/2, probeDimensions)
 	rodMesh = GeometryBasics.Cylinder(origin, rodEnd, rodDiameter/2)
 	
 	#we need to put a point at the origin
 	probeScene = WGLMakie.mesh!(myScene, probeMesh, color = :red, shading = true)
-	rodScene = WGLMakie.mesh!(myScene, rodMesh, color = :black)
+	rodScene = WGLMakie.mesh!(myScene, rodMesh, color = :silver)
 	
 	#INTERACTABLES
 	#a button called run will seek the item interactor forward else pausing
@@ -338,20 +385,67 @@ let
 	buttonPlayPause = Makie.Button(buttonContainer[1,1], label = "Play")
 	buttonReset = Makie.Button(buttonContainer[1,2], label = "Reset")
 	sliderTimeSeek = Makie.Slider(fig[3, 1]; range = eachindex(timeValues), startvalue = 1)
-	
+
 	#EVENTS
 	#when the playback index changes what do we do
 	WGLMakie.on(playbackIndex) do idx
-		SetNextPose!(idx, rodScene, probeScene)
+		SetNextPose!(idx, probeScene, rodScene)
 	end
 
 	WGLMakie.on(sliderTimeSeek.value) do curFrame
+		if !syncLockRef[]
+			playbackIsRunning[] = false
+		end
 		playbackIndex[] = curFrame
 	end
 
+	#solution to deal with pluto reactivity and async loops.
+	WGLMakie.on(buttonPlayPause.clicks) do _
+		if playbackIsRunning[]
+			#pause
+			playbackIsRunning[] = false
+		elseif !playbackIsRunning[]
+			#play
+			if playbackIndex[] >= endTimeIndex
+				SeekSlider!(1, playbackIndex, syncLockRef, sliderTimeSeek)
+			end
+			playbackIsRunning[] = true
+			playbackToken[] = playbackToken[] + 1
+			mToken = playbackToken[]
+			@async begin
+				#TODO
+				#Get the current time.
+				initClockTime = time()
+				timeStart = timeValues[playbackIndex[]] #resume from current slider value
+				
+				#While we are running and check the token
+				while playbackIsRunning[] && playbackToken[] == $mToken
+					#Get the current elapsed time and convert that to an index.
+					t = timeStart + (time() - initClockTime)
+					if t >= timeValues[end]
+						SeekSlider!(length(timeValues), playbackIndex, syncLockRef, sliderTimeSeek)
+						playbackIsRunning[] = false
+						break
+					end
+					#seek the slider to that index (which triggers playbackIndex to update pose).
+						#if the index is not possible to seek, should stop OR add loop functionality.
+					SeekSlider!(GetNearestValueAsIndex(t, timeValues), playbackIndex, syncLockRef, sliderTimeSeek)
+					#wait or yield for fps.
+					sleep(1/fps)
+				end
+			end
+		end
+	end
 	
-	playbackIndex[] = 1 #set the initial
-	fig
+	WGLMakie.on(buttonReset.clicks) do _
+		#bugged
+		playbackIsRunning[] = false
+		SeekSlider!(1, playbackIndex, syncLockRef, sliderTimeSeek)
+	end
+	
+	playbackIndex[] = 1 #set the initial index
+	fig #show fig
+
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
