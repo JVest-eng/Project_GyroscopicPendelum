@@ -309,13 +309,15 @@ begin
 	ujsol = [sol.u[i][9] for i in eachindex(sol)]
 	ugammasol = [sol.u[i][10] for i in eachindex(sol)]
 	θsol = [acos(q0^2 + q3^2 - q1^2 - q2^2) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	ϕsol = [-atan(2(q1*q3+q0*q2),2(q2*q3-q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	γsol = [atan(2(q1*q3-q0*q2),2(q2*q3+q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
 end
 
 # ╔═╡ 740dd046-59f9-419a-876d-ca0fd29624f5
 begin
 	import DataStructures
-	pc1 = Plots.plot(timeValues, θsol, legend = false, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
-	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], color = :black)
+	pc1 = Plots.plot(timeValues, [θsol, ϕsol, γsol], label = ["θ" "ϕ" "γ"], legend = :outerright, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
+	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], label = "θ_ref", color = :black)
 	
 	pc3 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
 	Plots.plot(pc1, pc3, layout = (2,1))
@@ -328,7 +330,7 @@ begin
 				 2(x*y+w*z) 1-2(x^2+z^2) 2(y*z-w*x);
 				 2(x*z-w*y) 2(y*z+w*x) 1-2(x^2+y^2)]
 	function GetQuaternionAtIndex(index)
-		return WGLMakie.Quaternionf(-q1sol[index],-q2sol[index],-q3sol[index],q0sol[index])
+		return WGLMakie.Quaternionf(q1sol[index],q2sol[index],q3sol[index],q0sol[index])
 	end
 	function SetNextPose!(index, probeScene, rodScene)
 		newq = GetQuaternionAtIndex(index)
