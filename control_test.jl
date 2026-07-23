@@ -24,7 +24,7 @@ end
 
 # ╔═╡ 7b24588d-d6ba-415e-9cf1-e05fd4df864c
 begin
-	import LinearAlgebra, Symbolics,  ControlSystemsBase, DifferentialEquations, Plots, WGLMakie, Makie, GeometryBasics
+	import LinearAlgebra, Symbolics,  ControlSystemsBase, DifferentialEquations, DiffEqCallbacks, Plots, WGLMakie, Makie, GeometryBasics
 	using Latexify
 end
 
@@ -33,20 +33,22 @@ md"""
 # Simulation of Controllability of Gyrostat
 ### 1. Configuration
 #### Mechanical
-Rod Mass: $(@bind rodMass Slider(1:0.1:80, default=15.0, show_value=true)) g \
-Probe Mass: $(@bind probeMass Slider(1:0.1:100, default=50.0, show_value = true)) g \
+Rod Mass: $(@bind rodMass Slider(1:0.1:80, default=10.0, show_value=true)) g \
+Probe Mass: $(@bind probeMass Slider(1:0.1:100, default=10.0, show_value = true)) g \
 Probe Length: $(@bind probeLength Slider(0.1:0.1:3, default=3.0, show_value = true)) cm \
 Rod Length: $(@bind rodLength Slider(1:0.1:30, default=15.0, show_value = true)) cm \
 Rod Diameter: $(@bind rodDiameter Slider(0.1:0.1:2, default=2.0, show_value = true)) cm \
-Wheel Inertia: $(@bind wheelInertia NumberField(0.1:0.1:50, default=25.0)) g cm^2\
-Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=25.0)) g cm\
-Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=25.0)) g cm\
+Wheel Inertia: $(@bind wheelInertia NumberField(0.1:0.1:50, default=80.0)) g cm^2\
+Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=9.0)) g cm\
+Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=9.0)) g cm\
 
 #### Simulation
 Simulation Time: $(@bind simTime Slider(1:0.1:20, default=10.0, show_value=true)) s\
 Initial Nutation Angle: $(@bind initNutAngle Slider(0:0.1:70, default=0.0, show_value=true)) degrees \
 Animation Smoothness: $(@bind max_fps Slider(12:2:60, default=20, show_value = true)) fps \
 Nutation Angle (To Hold): $(@bind nutationAngleToHold Slider(0:0.1:70, default=30.0, show_value=true)) degrees \
+Controller FPS: $(@bind controllerFPS NumberField(1:1:1000, default=100)) Hz \
+Max Wheel Speed: $(@bind WheelSpeed NumberField(1000:1:5000, default=2000)) rpm \
 """
 
 # ╔═╡ 77d79145-70db-44e2-9f20-c0fd2e383ec7
@@ -92,7 +94,7 @@ begin
 		rcm = phys.r_cm
 
 		cθ, sθ = cos(deg2rad(curAngle)), sin(deg2rad(curAngle))
-		uγref  = (gyroCond(curAngle) - phys.I_A*0)/phys.J_s*1.025
+		uγref  = (gyroCond(curAngle) - phys.I_A*0)/phys.J_s*1.0025
     	Hγ  = phys.J_s*uγref
 		ϕ_dot = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
 		Γref = [sθ, 0.0, cθ]
@@ -156,42 +158,50 @@ begin
 	end
 end
 
+# ╔═╡ a6076b1c-decd-4193-a395-088b6aaea767
+mutable struct LastFrame
+    du_i::Float64
+	du_j::Float64
+	du_γ::Float64
+end
+
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
 begin
-	maxWheelSpeed = 8000*2*pi/60
+	maxWheelSpeed = WheelSpeed*2*pi/60
 	maxPrecessionSpeed = 2*pi
-	maxSpinSpeed = 5000
-	maxWheelAccel = 500 #rad/s^2
+	maxSpinSpeed = 2000
+	maxWheelAccel = 600 #rad/s^2
 	function PrecomputeLQRGain(phys, nAngle)
 		A, B, Χ_ref, F, T = GenerateStateSpace(phys,nAngle)
 		mQ = LinearAlgebra.zeros(8);
-		if nAngle > 1e-2
+		if abs(deg2rad(nAngle)) > 0.005
 			mQ = [1/(2*pi)^2,
 			1/(maxPrecessionSpeed*sin(deg2rad(nAngle)))^2,
 			1/(maxSpinSpeed + maxPrecessionSpeed*cos(deg2rad(nAngle)))^2,
 			1/0.005^2,
-			1/0.005^2,
-			1/(0.25*maxWheelSpeed)^2,
-			1/(0.25*maxWheelSpeed)^2,
-			1/(0.25*maxWheelSpeed)^2]
+			1/0.025^2,
+			1/(maxWheelSpeed)^2,
+			1/(maxWheelSpeed)^2,
+			1/(maxWheelSpeed)^2]
 		else
 			mQ = [1/(2*pi)^2,
-			0,
+			1,
 			1/(maxSpinSpeed + maxPrecessionSpeed)^2,
 			1/0.005^2,
 			1/0.005^2,
-			1/(0.25*maxWheelSpeed)^2,
-			1/(0.25*maxWheelSpeed)^2,
-			1/(0.25*maxWheelSpeed)^2]
+			1/(0.0025*maxWheelSpeed)^2,
+			1/(0.0025*maxWheelSpeed)^2,
+			1/(0.0025*maxWheelSpeed)^2]
 		end
 		Q = LinearAlgebra.Diagonal(mQ) #fix for nutation angle zero.
-		R = LinearAlgebra.Diagonal([1/maxWheelAccel^2,1/maxWheelAccel^2,1/maxWheelAccel^2]) #bryson's rule
+		R = LinearAlgebra.Diagonal([1/(0.25*maxWheelAccel)^2,1/(0.25*maxWheelAccel)^2,1/(0.25*maxWheelAccel)^2]) #bryson's rule
 		
 		K = ControlSystemsBase.lqr(A, B, Q, R)
 		return K, Χ_ref, F, T
 	end
 	p_lqr = (
 		Physics = physics,
+		mLastFrame = LastFrame(0.0,0.0,0.0),
 		GainTuple = PrecomputeLQRGain(physics, nutationAngleToHold)
 	)
 	(gyroCond(deg2rad(nutationAngleToHold)) - physics.J_s*maxWheelSpeed)/physics.I_A
@@ -212,20 +222,30 @@ begin
 	end
 end
 
-# ╔═╡ 7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
-# ╠═╡ disabled = true
-#=╠═╡
+# ╔═╡ 73ec6f78-1263-4e2b-bdac-557919eea007
 begin
-	itemToPlot = PrecomputeLQRGain(physics, 0)
-	maps = [Plots.heatmap(itemToPlot[1]')]
-	for i in 5:5:45
-		itemToPlot = PrecomputeLQRGain(physics, i)
-		m = Plots.heatmap(itemToPlot[1]')
-		push!(maps, m)
+	function new_frame_control!(integrator)
+		mu = integrator.u
+		ω_i, ω_j, ω_γ, q0, q1, q2, q3, Ω_i, Ω_j, Ω_γ = mu[1], mu[2], mu[3], mu[4], mu[5], mu[6], mu[7], mu[8], mu[9], mu[10]
+		#simulate sensor reads + electron noise (TODO)
+		Γ_i = 2*(q1*q3 - q0*q2)
+		Γ_j = 2*(q2*q3 + q0*q1)
+		Γ_γ = q0^2+q3^2-q2^2-q1^2
+		
+		#noise filtering (TODO)
+		sensor = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
+		
+		#control law
+		δx = GetAugmentedError(sensor, integrator.p.GainTuple[2], integrator.p.GainTuple[3], integrator.p.GainTuple[4])
+	    # compute new control law value
+		cmd = -integrator.p.GainTuple[1]*δx
+		integrator.p.mLastFrame.du_i = cmd[1]
+		integrator.p.mLastFrame.du_j = cmd[2]
+		integrator.p.mLastFrame.du_γ = cmd[3]
+	
 	end
-	Plots.plot(maps..., layout=(5,4))
+	cb = DiffEqCallbacks.PeriodicCallback(new_frame_control!, 1/controllerFPS)
 end
-  ╠═╡ =#
 
 # ╔═╡ e29f87fb-503a-4bf7-ba49-d37950c2602b
 begin
@@ -233,20 +253,10 @@ begin
 		#populate data
 		ω_i, ω_j, ω_γ, q0, q1, q2, q3, Ω_i, Ω_j, Ω_γ = u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10]
 		
-		#simulate sensor reads
-		Γ_i = 2*(q1*q3 - q0*q2)
-		Γ_j = 2*(q2*q3 + q0*q1)
-		Γ_γ = q0^2+q3^2-q2^2-q1^2
-		
-		sensor = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
-		
-		#control law
-		δx = GetAugmentedError(sensor, p.GainTuple[2], p.GainTuple[3], p.GainTuple[4])
-		δdΩ = -p.GainTuple[1]*δx
-		dΩ = δdΩ
-		dΩ_i, dΩ_j, dΩ_γ = dΩ[1], dΩ[2], dΩ[3]
-		
-		#update	
+		#update
+		dΩ_i = p.mLastFrame.du_i 
+		dΩ_j = p.mLastFrame.du_j
+		dΩ_γ = p.mLastFrame.du_γ
 		MassMatrix = [p.Physics.I_T 0 0; 
 					  0 p.Physics.I_T 0; 
 					  0 0 p.Physics.I_A]
@@ -276,9 +286,10 @@ begin
 		du[2] = rhs[2] / MassMatrix[2,2]
 		du[3] = rhs[3] / MassMatrix[3,3]
 
-		du[8] = dΩ_i
-		du[9] = dΩ_j
-		du[10] = dΩ_γ
+		#wheelspeed with saturation
+		du[8] = abs(u[8]) > maxWheelSpeed ? 0 : dΩ_i
+		du[9] = abs(u[9]) > maxWheelSpeed ? 0 : dΩ_j
+		du[10] = abs(u[10]) > maxWheelSpeed ? 0 : dΩ_γ
 	end
 end
 
@@ -286,6 +297,7 @@ end
 begin
 	nutA = deg2rad(initNutAngle)
 	tspan = (0.0, round(simTime*1000/max_fps)*max_fps/1000)
+	
 	u0 = [0.0, 0.0, 0.0, cos(nutA/2), sin(nutA/2), 0.0, 0.0, 0.0, 0.0, 0.0]
 	prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_lqr)
 	sol = DifferentialEquations.solve(
@@ -293,8 +305,9 @@ begin
 		DifferentialEquations.Tsit5(), 
 		reltol=1e-6, 
 		abstol=1e-8,
-		maxiters=3*max_fps*round(simTime*1000),
+		maxiters=1e+7,
 		saveat=1/max_fps,
+		callback = cb
 	)
 	
 	timeValues = sol.t
@@ -317,10 +330,18 @@ end
 begin
 	import DataStructures
 	pc1 = Plots.plot(timeValues, [θsol, ϕsol, γsol], label = ["θ" "ϕ" "γ"], legend = :outerright, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
-	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], label = "θ_ref", color = :black)
+	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], label = "θ_ref", color = Plots.Colors.RGBA(0,0.25,1,1), linestyle = :dash)
 	
 	pc3 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
 	Plots.plot(pc1, pc3, layout = (2,1))
+end
+
+# ╔═╡ 26e34a6e-9a92-43cd-ac9e-073a10405d0e
+begin
+	pc4 = Plots.plot(timeValues, [wisol, wjsol, wgammasol], label = ["ω_i" "ω_j" "ω_γ"],legend = :outerright, title = "ω(t), Body Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
+	pc5 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
+	Plots.plot(pc4,pc5, layout=(2,1))
+	#Plots.plot(pc4
 end
 
 # ╔═╡ 1234dad7-3c75-4f40-8f80-f3601a41c891
@@ -455,6 +476,7 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 ControlSystemsBase = "aaaaaaaa-a6ca-5380-bf3e-84a91bcd477e"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 Latexify = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
@@ -468,6 +490,7 @@ WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 [compat]
 ControlSystemsBase = "~1.20.3"
 DataStructures = "~0.19.4"
+DiffEqCallbacks = "~4.16.0"
 DifferentialEquations = "~7.17.0"
 GeometryBasics = "~0.5.10"
 Latexify = "~0.16.10"
@@ -484,7 +507,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "001e3b3caa7e2aa3faa128a89cdc647ede9cc302"
+project_hash = "4d5f08d87e75a6ec3db725e84da5b6e1021e55ca"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "bbc22a9a08a0ef6460041086d8a7b27940ed4ffd"
@@ -4178,12 +4201,14 @@ version = "1.13.0+0"
 # ╠═179b51a6-05f8-4810-b68c-b330ff1de0e1
 # ╠═433128f6-11d5-49fd-b73a-ab45d45d347a
 # ╠═e272f348-a067-42ee-9a5b-42b383042bc3
+# ╠═a6076b1c-decd-4193-a395-088b6aaea767
 # ╠═bf736020-ddce-4045-bc8c-2072d4aad86c
 # ╠═dac310f6-3603-468a-b41d-b97dbcebca0a
-# ╟─7ec6f4d3-a5bf-4cab-8fbf-c8f2034c3b69
+# ╠═73ec6f78-1263-4e2b-bdac-557919eea007
 # ╠═e29f87fb-503a-4bf7-ba49-d37950c2602b
 # ╠═768d624b-44a3-4053-8318-4c2ab32a0f7d
 # ╠═740dd046-59f9-419a-876d-ca0fd29624f5
+# ╠═26e34a6e-9a92-43cd-ac9e-073a10405d0e
 # ╠═1234dad7-3c75-4f40-8f80-f3601a41c891
 # ╠═e3dffecc-a47b-4539-8ff6-ad53de12e602
 # ╟─00000000-0000-0000-0000-000000000001
