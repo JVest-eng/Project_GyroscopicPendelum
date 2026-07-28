@@ -36,7 +36,7 @@ md"""
 Rod Mass: $(@bind rodMass Slider(1:0.1:80, default=10.0, show_value=true)) g \
 Probe Mass: $(@bind probeMass Slider(1:0.1:100, default=10.0, show_value = true)) g \
 Probe Length: $(@bind probeLength Slider(0.1:0.1:3, default=3.0, show_value = true)) cm \
-Rod Length: $(@bind rodLength Slider(1:0.1:30, default=15.0, show_value = true)) cm \
+Rod Length: $(@bind rodLength Slider(1:0.1:30, default=7.5, show_value = true)) cm \
 Rod Diameter: $(@bind rodDiameter Slider(0.1:0.1:2, default=2.0, show_value = true)) cm \
 Wheel Inertia: $(@bind wheelInertia NumberField(0.1:0.1:50, default=80.0)) g cm^2\
 Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=9.0)) g cm\
@@ -49,6 +49,8 @@ Animation Smoothness: $(@bind max_fps Slider(12:2:60, default=20, show_value = t
 Nutation Angle (To Hold): $(@bind nutationAngleToHold Slider(0:0.1:70, default=30.0, show_value=true)) degrees \
 Controller FPS: $(@bind controllerFPS NumberField(1:1:1000, default=100)) Hz \
 Max Wheel Speed: $(@bind WheelSpeed NumberField(1000:1:5000, default=2000)) rpm \
+Max Wheel Acceleration: $(@bind WheelAcceleration NumberField(1:1:2000, default=600)) rad/s^2 \
+Motor Response Time: $(@bind MotorResponseTime NumberField(1:1:2000, default=10)) ms \
 """
 
 # ╔═╡ 77d79145-70db-44e2-9f20-c0fd2e383ec7
@@ -94,8 +96,8 @@ begin
 		rcm = phys.r_cm
 
 		cθ, sθ = cos(deg2rad(curAngle)), sin(deg2rad(curAngle))
-		uγref  = (gyroCond(curAngle) - phys.I_A*0)/phys.J_s*1.0025
-    	Hγ  = phys.J_s*uγref
+		uγref  = (gyroCond(curAngle) - phys.I_A*0)/phys.J_s
+    	Hγ  = phys.J_s*uγref*1.25 #momentum budget
 		ϕ_dot = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
 		Γref = [sθ, 0.0, cθ]
 		ωref = ϕ_dot .* Γref .+ [0,0,-ϕ_dot*cθ]
@@ -159,7 +161,7 @@ begin
 end
 
 # ╔═╡ a6076b1c-decd-4193-a395-088b6aaea767
-mutable struct LastFrame
+mutable struct ControllerState
     du_i::Float64
 	du_j::Float64
 	du_γ::Float64
@@ -168,43 +170,96 @@ end
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
 begin
 	maxWheelSpeed = WheelSpeed*2*pi/60
-	maxPrecessionSpeed = 2*pi
-	maxSpinSpeed = 2000
-	maxWheelAccel = 600 #rad/s^2
+	maxWheelAccel = WheelAcceleration
+
+	#tolerated errors
+	transverseSpeedTol = 1.0 #rad/s
+	spinSpeedTol = 20.0 #rad/s
+	tiltMeridonalTol = deg2rad(4.0)
+	tiltAzimuthTol = deg2rad(8.0)
+	wheelSpeedTol = 0.15*maxWheelSpeed
+	wheelAccelTol = 0.25*maxWheelAccel
+	
 	function PrecomputeLQRGain(phys, nAngle)
 		A, B, Χ_ref, F, T = GenerateStateSpace(phys,nAngle)
-		mQ = LinearAlgebra.zeros(8);
-		if abs(deg2rad(nAngle)) > 0.005
-			mQ = [1/(2*pi)^2,
-			1/(maxPrecessionSpeed*sin(deg2rad(nAngle)))^2,
-			1/(maxSpinSpeed + maxPrecessionSpeed*cos(deg2rad(nAngle)))^2,
-			1/0.005^2,
-			1/0.025^2,
-			1/(maxWheelSpeed)^2,
-			1/(maxWheelSpeed)^2,
-			1/(maxWheelSpeed)^2]
-		else
-			mQ = [1/(2*pi)^2,
-			1,
-			1/(maxSpinSpeed + maxPrecessionSpeed)^2,
-			1/0.005^2,
-			1/0.005^2,
-			1/(0.0025*maxWheelSpeed)^2,
-			1/(0.0025*maxWheelSpeed)^2,
-			1/(0.0025*maxWheelSpeed)^2]
-		end
-		Q = LinearAlgebra.Diagonal(mQ) #fix for nutation angle zero.
-		R = LinearAlgebra.Diagonal([1/(0.25*maxWheelAccel)^2,1/(0.25*maxWheelAccel)^2,1/(0.25*maxWheelAccel)^2]) #bryson's rule
+
+		Q = LinearAlgebra.Diagonal([1/transverseSpeedTol^2,
+								    1/transverseSpeedTol^2,
+								    1/spinSpeedTol^2,
+								    1/tiltMeridonalTol^2,
+								    1/tiltAzimuthTol^2,
+								    1/wheelSpeedTol^2,
+								   	1/wheelSpeedTol^2,
+								   	1/wheelSpeedTol^2])
+		
+		R = LinearAlgebra.Diagonal([1/wheelAccelTol^2,
+								   1/wheelAccelTol^2,
+								   1/wheelAccelTol^2])
 		
 		K = ControlSystemsBase.lqr(A, B, Q, R)
 		return K, Χ_ref, F, T
 	end
+end
+
+# ╔═╡ c3732bc1-0b87-42e3-b8d5-a9537599550d
+begin
+	#gain scheduling
+	function BuildGainSchedule(phys, nutationAngleToHold)
+	    mSchedule = Tuple{
+	        Float64,
+	        Matrix{Float64},
+	        Vector{Float64},
+	        Matrix{Float64},
+	        Matrix{Float64}
+	    }[]
+	
+	    for iAngle in 0.0:2.0:70.0
+	        K, Χ_ref, F, T = PrecomputeLQRGain(phys, iAngle)
+	        push!(mSchedule, (deg2rad(iAngle), K, Χ_ref, F, T))
+	    end
+	
+	    if !any(t -> t[1] == deg2rad(nutationAngleToHold), mSchedule) &&
+	       nutationAngleToHold <= 70.0
+	
+	        K, Χ_ref, F, T = PrecomputeLQRGain(phys, nutationAngleToHold)
+	
+	        itemToInsert = (deg2rad(nutationAngleToHold), K, Χ_ref, F, T)
+	
+	        idx = searchsortedfirst(mSchedule, itemToInsert; by = x -> x[1])
+	        insert!(mSchedule, idx, itemToInsert)
+	    end
+	
+	    return mSchedule
+	end
+
+	function ScheduleLookup(sched, curAngle, targetAngle)
+		#angles are expressed in radians here.
+		n = length(sched)
+		idx = 1
+		#move toward target, bias toward the K's closer to target
+		if targetAngle > curAngle
+			idx = searchsortedfirst(sched, curAngle; by = x -> x[1])
+			idx = clamp(idx, 1, n)
+		elseif targetAngle <= curAngle
+			idx = searchsortedlast(sched, curAngle; by = x -> x[1])
+			idx = clamp(idx, 1, n)
+		end
+		_, K, _, F, T = sched[idx]
+		return K, F, T
+	end
+	_, mΧ_ref, _, _ = PrecomputeLQRGain(physics, nutationAngleToHold) #hacky
+		
 	p_lqr = (
 		Physics = physics,
-		mLastFrame = LastFrame(0.0,0.0,0.0),
-		GainTuple = PrecomputeLQRGain(physics, nutationAngleToHold)
+		mLastFrame = ControllerState(0.0, 0.0, 0.0),
+		Schedule = BuildGainSchedule(physics, nutationAngleToHold),
+		referenceTarget = mΧ_ref,
+		nutationTarget = deg2rad(nutationAngleToHold),
+		maxWheelSpeed = maxWheelSpeed,
+		maxWheelAccel = maxWheelAccel,
+		motorResponseTime = 1e-7
 	)
-	(gyroCond(deg2rad(nutationAngleToHold)) - physics.J_s*maxWheelSpeed)/physics.I_A
+	#(gyroCond(deg2rad(nutationAngleToHold)) - physics.I_A*maxSpinSpeed)/physics.J_s * 60/(2*pi)
 end
 
 # ╔═╡ dac310f6-3603-468a-b41d-b97dbcebca0a
@@ -222,41 +277,25 @@ begin
 	end
 end
 
-# ╔═╡ 73ec6f78-1263-4e2b-bdac-557919eea007
+# ╔═╡ 7fd4f706-5e54-4cf2-a53a-dc10fdcb4bf8
 begin
-	function new_frame_control!(integrator)
+	function adr_frame_control!(integrator)
 		mu = integrator.u
-		ω_i, ω_j, ω_γ, q0, q1, q2, q3, Ω_i, Ω_j, Ω_γ = mu[1], mu[2], mu[3], mu[4], mu[5], mu[6], mu[7], mu[8], mu[9], mu[10]
-		#simulate sensor reads + electron noise (TODO)
-		Γ_i = 2*(q1*q3 - q0*q2)
-		Γ_j = 2*(q2*q3 + q0*q1)
-		Γ_γ = q0^2+q3^2-q2^2-q1^2
-		
-		#noise filtering (TODO)
-		sensor = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
-		
-		#control law
-		δx = GetAugmentedError(sensor, integrator.p.GainTuple[2], integrator.p.GainTuple[3], integrator.p.GainTuple[4])
-	    # compute new control law value
-		cmd = -integrator.p.GainTuple[1]*δx
-		integrator.p.mLastFrame.du_i = cmd[1]
-		integrator.p.mLastFrame.du_j = cmd[2]
-		integrator.p.mLastFrame.du_γ = cmd[3]
-	
 	end
-	cb = DiffEqCallbacks.PeriodicCallback(new_frame_control!, 1/controllerFPS)
+	cb2 = DiffEqCallbacks.PeriodicCallback(adr_frame_control!, 1/controllerFPS)
 end
 
 # ╔═╡ e29f87fb-503a-4bf7-ba49-d37950c2602b
 begin
 	function GyrostatPhysics!(du, u, p, t)
 		#populate data
-		ω_i, ω_j, ω_γ, q0, q1, q2, q3, Ω_i, Ω_j, Ω_γ = u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10]
+		ω_i, ω_j, ω_γ, q0, q1, q2, q3, Ω_i, Ω_j, Ω_γ, aΩ_i, aΩ_j, aΩ_γ = u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13]
 		
 		#update
-		dΩ_i = p.mLastFrame.du_i 
-		dΩ_j = p.mLastFrame.du_j
-		dΩ_γ = p.mLastFrame.du_γ
+		dΩ_i = clamp(p.mLastFrame.du_i, -p.maxWheelAccel, p.maxWheelAccel)
+		dΩ_j = clamp(p.mLastFrame.du_j, -p.maxWheelAccel, p.maxWheelAccel)
+		dΩ_γ = clamp(p.mLastFrame.du_γ, -p.maxWheelAccel, p.maxWheelAccel)
+		
 		MassMatrix = [p.Physics.I_T 0 0; 
 					  0 p.Physics.I_T 0; 
 					  0 0 p.Physics.I_A]
@@ -280,16 +319,22 @@ begin
 		du[6] = (1/2)*(Skew4[3,1]*q0 + Skew4[3,2]*q1 + Skew4[3,3]*q2 + Skew4[3,4]*q3)
 		du[7] = (1/2)*(Skew4[4,1]*q0 + Skew4[4,2]*q1 + Skew4[4,3]*q2 + Skew4[4,4]*q3)
 
-		rhs = (GravityVector .- Beta .* [ω_i; ω_j; ω_γ] .- Skew3 * (MassMatrix * [ω_i; ω_j; ω_γ] .+ p.Physics.J_s.*[Ω_i; Ω_j; Ω_γ]) .- p.Physics.J_s.*[dΩ_i; dΩ_j; dΩ_γ])
+		#motor response at first order lag.
+		# this isn't modelled in the controller because the time constant is really fast.
+		du[11] = (dΩ_i - aΩ_i)/p.motorResponseTime
+		du[12] = (dΩ_j - aΩ_j)/p.motorResponseTime
+		du[13] = (dΩ_γ - aΩ_γ)/p.motorResponseTime
+		
+		rhs = (GravityVector .- Beta .* [ω_i; ω_j; ω_γ] .- Skew3 * (MassMatrix * [ω_i; ω_j; ω_γ] .+ p.Physics.J_s.*[Ω_i; Ω_j; Ω_γ]) .- p.Physics.J_s.*[aΩ_i; aΩ_j; aΩ_γ])
 		
 		du[1] = rhs[1] / MassMatrix[1,1]
 		du[2] = rhs[2] / MassMatrix[2,2]
 		du[3] = rhs[3] / MassMatrix[3,3]
 
 		#wheelspeed with saturation
-		du[8] = abs(u[8]) > maxWheelSpeed ? 0 : dΩ_i
-		du[9] = abs(u[9]) > maxWheelSpeed ? 0 : dΩ_j
-		du[10] = abs(u[10]) > maxWheelSpeed ? 0 : dΩ_γ
+		du[8] = abs(Ω_i) >= p.maxWheelSpeed && sign(Ω_i) == sign(aΩ_i) ? 0 : aΩ_i
+		du[9] = abs(Ω_j) >= p.maxWheelSpeed && sign(Ω_j) == sign(aΩ_j) ? 0 : aΩ_j
+		du[10] = abs(Ω_γ) >= p.maxWheelSpeed && sign(Ω_γ) == sign(aΩ_γ) ? 0 : aΩ_γ
 	end
 end
 
@@ -298,11 +343,14 @@ begin
 	nutA = deg2rad(initNutAngle)
 	tspan = (0.0, round(simTime*1000/max_fps)*max_fps/1000)
 	
-	u0 = [0.0, 0.0, 0.0, cos(nutA/2), sin(nutA/2), 0.0, 0.0, 0.0, 0.0, 0.0]
+	u0 = [0.0, 0.0, 0.0, 
+		  cos(nutA/2), sin(nutA/2), 0.0, 0.0, 
+		  0.0, 0.0, 0.0,
+		  0.0, 0.0, 0.0]
 	prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_lqr)
 	sol = DifferentialEquations.solve(
 		prob, 
-		DifferentialEquations.Tsit5(), 
+		DifferentialEquations.AutoTsit5(DifferentialEquations.Rosenbrock23()), 
 		reltol=1e-6, 
 		abstol=1e-8,
 		maxiters=1e+7,
@@ -321,7 +369,7 @@ begin
 	uisol = [sol.u[i][8] for i in eachindex(sol)]
 	ujsol = [sol.u[i][9] for i in eachindex(sol)]
 	ugammasol = [sol.u[i][10] for i in eachindex(sol)]
-	θsol = [acos(q0^2 + q3^2 - q1^2 - q2^2) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	θsol = [acos(clamp(q0^2 + q3^2 - q1^2 - q2^2,-1.0, 1.0)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
 	ϕsol = [-atan(2(q1*q3+q0*q2),2(q2*q3-q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
 	γsol = [atan(2(q1*q3-q0*q2),2(q2*q3+q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
 end
@@ -470,6 +518,92 @@ begin
 	fig #show fig
 
 end
+
+# ╔═╡ f1612c4d-608c-4846-85aa-60f77bf7dd4c
+begin
+	function lqr_frame_control!(integrator)
+		p  = integrator.p
+		mu = integrator.u
+		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
+		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7]
+		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
+
+		Γ_i = 2*(q1*q3 - q0*q2)
+		Γ_j = 2*(q2*q3 + q0*q1)
+		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
+
+		sens = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
+
+		curAngle = acos(clamp(Γ_γ, -1, 1))
+		#get the current gain
+		K, F, T = ScheduleLookup(p.Schedule, curAngle, p.nutationTarget)
+		δx = GetAugmentedError(sens, p.referenceTarget, F, T)
+		cmd = -K*δx
+		p.mLastFrame.du_i = cmd[1]
+		p.mLastFrame.du_j = cmd[2]
+		p.mLastFrame.du_γ = cmd[3]
+	end
+	cb = DiffEqCallbacks.PeriodicCallback(lqr_frame_control!, 1/controllerFPS)
+end
+
+# ╔═╡ 73ec6f78-1263-4e2b-bdac-557919eea007
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	function lqr_frame_control!(integrator)
+		p  = integrator.p
+		mu = integrator.u
+		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
+		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7]
+		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
+
+		Γ_i = 2*(q1*q3 - q0*q2)
+		Γ_j = 2*(q2*q3 + q0*q1)
+		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
+		Γ   = [Γ_i, Γ_j, Γ_γ]
+		ω   = [ω_i, ω_j, ω_γ]
+		u   = [Ω_i, Ω_j, Ω_γ]
+
+		dt = 1/controllerFPS
+
+		# ---- gain + design-azimuth reference at the commanded cone ----
+		K, Χd, θc = ScheduleLookup(p.Schedule, p.mLastFrame.θ_cmd)
+		ωd, Γd, ud = Χd[1:3], Χd[4:6], Χd[7:9]
+
+		# ---- design frame at θc (meridian, azimuth, radial) ----
+		cθ, sθ = cos(θc), sin(θc)
+		t1d = [cθ, 0.0, -sθ]
+		t2d = [0.0, 1.0, 0.0]
+		Td  = hcat(t1d, t2d)
+		Fd  = hcat(t1d, t2d, [sθ, 0.0, cθ])
+
+		# ---- rotate everything to the LIVE azimuth about e_γ ----
+		h = hypot(Γ_i, Γ_j)
+		ni, nj = h > 1e-4 ? (Γ_i/h, Γ_j/h) : (1.0, 0.0)
+		Rz = [ni -nj 0.0; nj ni 0.0; 0.0 0.0 1.0]
+		ωref, Γref, uref = Rz*ωd, Rz*Γd, Rz*ud
+		F, T = Rz*Fd, Rz*Td
+
+		# ---- error and command ----
+		δx  = vcat(F'*(ω .- ωref), T'*(Γ .- Γref), u .- uref)
+		cmd = -K*δx
+		p.mLastFrame.du_i = cmd[1]
+		p.mLastFrame.du_j = cmd[2]
+		p.mLastFrame.du_γ = cmd[3]
+
+		# ---- reference governor: advance θ_cmd only if safe and feasible ----
+		η1, η2 = δx[4], δx[5]
+		H3     = p.Physics.I_A*ω_γ + p.Physics.J_s*Ω_γ
+		θ_next = min(p.mLastFrame.θ_cmd + p.θ̇_max*dt, p.θ_target)
+		ok_err = hypot(η1, η2) < p.η_freeze
+		ok_mom = H3 >= p.H_margin*gyroCond(θ_next)
+		if ok_err && ok_mom
+			p.mLastFrame.θ_cmd = θ_next
+		end
+	end
+	cb = DiffEqCallbacks.PeriodicCallback(lqr_frame_control!, 1/controllerFPS)
+end
+  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -4203,8 +4337,11 @@ version = "1.13.0+0"
 # ╠═e272f348-a067-42ee-9a5b-42b383042bc3
 # ╠═a6076b1c-decd-4193-a395-088b6aaea767
 # ╠═bf736020-ddce-4045-bc8c-2072d4aad86c
+# ╠═c3732bc1-0b87-42e3-b8d5-a9537599550d
 # ╠═dac310f6-3603-468a-b41d-b97dbcebca0a
 # ╠═73ec6f78-1263-4e2b-bdac-557919eea007
+# ╠═f1612c4d-608c-4846-85aa-60f77bf7dd4c
+# ╠═7fd4f706-5e54-4cf2-a53a-dc10fdcb4bf8
 # ╠═e29f87fb-503a-4bf7-ba49-d37950c2602b
 # ╠═768d624b-44a3-4053-8318-4c2ab32a0f7d
 # ╠═740dd046-59f9-419a-876d-ca0fd29624f5
