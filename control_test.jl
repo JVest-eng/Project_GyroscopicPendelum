@@ -36,21 +36,22 @@ md"""
 Rod Mass: $(@bind rodMass Slider(1:0.1:80, default=10.0, show_value=true)) g \
 Probe Mass: $(@bind probeMass Slider(1:0.1:100, default=10.0, show_value = true)) g \
 Probe Length: $(@bind probeLength Slider(0.1:0.1:3, default=3.0, show_value = true)) cm \
-Rod Length: $(@bind rodLength Slider(1:0.1:30, default=7.5, show_value = true)) cm \
+Rod Length: $(@bind rodLength Slider(1:0.1:15, default=10.0, show_value = true)) cm \
 Rod Diameter: $(@bind rodDiameter Slider(0.1:0.1:2, default=2.0, show_value = true)) cm \
-Wheel Inertia: $(@bind wheelInertia NumberField(0.1:0.1:50, default=80.0)) g cm^2\
-Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=9.0)) g cm\
-Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=9.0)) g cm\
+Wheel Inertia: $(@bind wheelInertia NumberField(10:0.1:500, default=140.0)) g cm^2\
+Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=2.0)) g cm\
+Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=2.0)) g cm\
 
 #### Simulation
+Controller Type: $(@bind useADRC Select(["lqr", "adr"]))\
 Simulation Time: $(@bind simTime Slider(1:0.1:20, default=10.0, show_value=true)) s\
 Initial Nutation Angle: $(@bind initNutAngle Slider(0:0.1:70, default=0.0, show_value=true)) degrees \
 Animation Smoothness: $(@bind max_fps Slider(12:2:60, default=20, show_value = true)) fps \
 Nutation Angle (To Hold): $(@bind nutationAngleToHold Slider(0:0.1:70, default=30.0, show_value=true)) degrees \
-Controller FPS: $(@bind controllerFPS NumberField(1:1:1000, default=100)) Hz \
-Max Wheel Speed: $(@bind WheelSpeed NumberField(1000:1:5000, default=2000)) rpm \
-Max Wheel Acceleration: $(@bind WheelAcceleration NumberField(1:1:2000, default=600)) rad/s^2 \
-Motor Response Time: $(@bind MotorResponseTime NumberField(1:1:2000, default=10)) ms \
+Controller FPS: $(@bind controllerFPS NumberField(1:1:1000, default=1000)) Hz \
+Max Wheel Speed: $(@bind WheelSpeed NumberField(1000:1:5000, default=6000)) rpm \
+Max Wheel Acceleration: $(@bind WheelAcceleration NumberField(1:1:2000, default=1600)) rad/s^2 \
+Motor Response Time: $(@bind MotorResponseTime NumberField(1:1:2000, default=10)) ms^-1 \
 """
 
 # ╔═╡ 77d79145-70db-44e2-9f20-c0fd2e383ec7
@@ -97,7 +98,7 @@ begin
 
 		cθ, sθ = cos(deg2rad(curAngle)), sin(deg2rad(curAngle))
 		uγref  = (gyroCond(curAngle) - phys.I_A*0)/phys.J_s
-    	Hγ  = phys.J_s*uγref*1.25 #momentum budget
+    	Hγ  = phys.J_s*uγref*1.5 #momentum budget
 		ϕ_dot = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
 		Γref = [sθ, 0.0, cθ]
 		ωref = ϕ_dot .* Γref .+ [0,0,-ϕ_dot*cθ]
@@ -127,7 +128,7 @@ begin
 			   -mass*grav*rcm/I_T 0 0;
 			   0 0 0]
 		
-		A_ωu = Im\(J_s*S(ω))
+		A_ωu = Im\(-J_s*S(ω))
 		
 		A_Γω = S(Γ)
 		A_ΓΓ = (-S(ω))
@@ -153,7 +154,7 @@ begin
 			  0 1 0;
 			  0 0 1]
 		
-		B = [ F'*B_ω; # sign fix
+		B = [ F'*B_ω;
 			  T_η;
 			  B_u]
 		return A, B, ref, F, T
@@ -165,6 +166,7 @@ mutable struct ControllerState
     du_i::Float64
 	du_j::Float64
 	du_γ::Float64
+	context::Vector{Float64}
 end
 
 # ╔═╡ bf736020-ddce-4045-bc8c-2072d4aad86c
@@ -174,11 +176,11 @@ begin
 
 	#tolerated errors
 	transverseSpeedTol = 1.0 #rad/s
-	spinSpeedTol = 20.0 #rad/s
-	tiltMeridonalTol = deg2rad(4.0)
-	tiltAzimuthTol = deg2rad(8.0)
-	wheelSpeedTol = 0.15*maxWheelSpeed
-	wheelAccelTol = 0.25*maxWheelAccel
+	spinSpeedTol = 1.0 #rad/s
+	tiltMeridonalTol = deg2rad(0.05)
+	tiltAzimuthTol = deg2rad(0.05)
+	wheelSpeedTol = deg2rad(4000.0*6)
+	wheelAccel = 0.75*maxWheelAccel
 	
 	function PrecomputeLQRGain(phys, nAngle)
 		A, B, Χ_ref, F, T = GenerateStateSpace(phys,nAngle)
@@ -188,13 +190,13 @@ begin
 								    1/spinSpeedTol^2,
 								    1/tiltMeridonalTol^2,
 								    1/tiltAzimuthTol^2,
-								    1/wheelSpeedTol^2,
-								   	1/wheelSpeedTol^2,
+								    1/(wheelSpeedTol*0.1)^2,
+								   	1/(wheelSpeedTol*0.1)^2,
 								   	1/wheelSpeedTol^2])
 		
-		R = LinearAlgebra.Diagonal([1/wheelAccelTol^2,
-								   1/wheelAccelTol^2,
-								   1/wheelAccelTol^2])
+		R = LinearAlgebra.Diagonal([1/wheelAccel^2,
+								   1/wheelAccel^2,
+								   1/wheelAccel^2])
 		
 		K = ControlSystemsBase.lqr(A, B, Q, R)
 		return K, Χ_ref, F, T
@@ -251,15 +253,52 @@ begin
 		
 	p_lqr = (
 		Physics = physics,
-		mLastFrame = ControllerState(0.0, 0.0, 0.0),
+		mLastFrame = ControllerState(0.0, 0.0, 0.0, Vector{Float64}(undef, 0)),
 		Schedule = BuildGainSchedule(physics, nutationAngleToHold),
 		referenceTarget = mΧ_ref,
 		nutationTarget = deg2rad(nutationAngleToHold),
 		maxWheelSpeed = maxWheelSpeed,
 		maxWheelAccel = maxWheelAccel,
-		motorResponseTime = 1e-7
+		motorResponseTime = 1/MotorResponseTime*1e-3
 	)
-	#(gyroCond(deg2rad(nutationAngleToHold)) - physics.I_A*maxSpinSpeed)/physics.J_s * 60/(2*pi)
+	(gyroCond(deg2rad(nutationAngleToHold)) - physics.I_A*200)/physics.J_s * 60/(2*pi)
+end
+
+# ╔═╡ 34cada1d-238e-4931-aa4c-ea8ee97717ee
+begin
+	κ = 1.5
+	cθ = cos(deg2rad(nutationAngleToHold))
+	sθ = sin(deg2rad(nutationAngleToHold))
+	H_crit = 2*sqrt(physics.I_T * physics.M_total * physics.g * physics.r_cm * cθ) #discriminant
+	Hγ = κ*H_crit
+		
+	prec_rate = (Hγ - sqrt(Hγ^2 - 4*physics.I_T*physics.M_total*physics.g*physics.r_cm*cθ))/(2*physics.I_T*cθ)
+
+	Γrefadr = [sθ, 0.0, cθ]
+	ωrefadr = prec_rate .* Γrefadr
+	urefadr = [0.0,0.0,(Hγ - physics.I_A*prec_rate*cθ) / physics.J_s]
+	
+	fastestSpin = (physics.I_A*ωrefadr[3] + physics.J_s*urefadr[3])/physics.I_T
+	display(fastestSpin)
+	m_ωC = 5.6*fastestSpin * [1.0,1.0,1.0] #rad/s
+	display(m_ωC * (1/controllerFPS))
+	kP = m_ωC/5
+	
+	p_adrc = (
+		Physics = physics,
+		MomentumBudget=κ,
+		mLastFrame = ControllerState(0.0, 0.0, 0.0, zeros(Float64, 11)),
+		referenceTarget = vcat(ωrefadr,Γrefadr,urefadr),
+		nutationTarget = deg2rad(nutationAngleToHold),
+		maxWheelSpeed = maxWheelSpeed,
+		maxWheelAccel = maxWheelAccel,
+		motorResponseTime = 1/MotorResponseTime*1e-3,
+		kP_Precession = 9.8,
+		kP_WheelGain = 0.2,
+		ωC = m_ωC, #rad/s
+		ωO = 5*m_ωC #rad/s
+	)
+	display(p_adrc.ωO*(1/controllerFPS))
 end
 
 # ╔═╡ dac310f6-3603-468a-b41d-b97dbcebca0a
@@ -277,13 +316,189 @@ begin
 	end
 end
 
-# ╔═╡ 7fd4f706-5e54-4cf2-a53a-dc10fdcb4bf8
+# ╔═╡ 02063916-50b8-4e89-9f15-a782dce657cf
+function TangentBasis(Γ)
+	#develop tangent basis vectors for plane
+	a = abs(Γ[1]) < 0.975 ? [1.0, 0.0, 0.0] : [0.0, 1.0, 0.0] # choose v1 such that it can never be zero after gram schmidt.
+	v1 = LinearAlgebra.normalize(a .- LinearAlgebra.dot(a, Γ)*Γ)
+	v2 = LinearAlgebra.cross(Γ, v1) #v3 cross v1 equals v2 in rhr orthonormal
+	T = hcat(v1, v2)
+	F = hcat(v1, v2, Γ)
+	return T
+end
+
+# ╔═╡ f1612c4d-608c-4846-85aa-60f77bf7dd4c
 begin
-	function adr_frame_control!(integrator)
+	function lqr_frame_control!(integrator)
+		p  = integrator.p
 		mu = integrator.u
+		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
+		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7]
+		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
+
+		Γ_i = 2*(q1*q3 - q0*q2)
+		Γ_j = 2*(q2*q3 + q0*q1)
+		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
+
+		sens = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
+
+		curAngle = acos(clamp(Γ_γ, -1, 1))
+		#get the current gain
+		K, F, T = ScheduleLookup(p.Schedule, curAngle, p.nutationTarget)
+
+		h = hypot(Γ_i, Γ_j)
+		ni, nj = h > 1e-4 ? (Γ_i/h, Γ_j/h) : (1.0, 0.0)
+		Rz  = [ni -nj 0.0; nj ni 0.0; 0.0 0.0 1.0]
+		ref = vcat(Rz*p.referenceTarget[1:3],
+           Rz*p.referenceTarget[4:6],
+           Rz*p.referenceTarget[7:9])
+		δx = GetAugmentedError(sens, ref, F, T)
+		cmd = -K*δx
+		p.mLastFrame.du_i = cmd[1]
+		p.mLastFrame.du_j = cmd[2]
+		p.mLastFrame.du_γ = cmd[3]
+	end
+	cb = DiffEqCallbacks.PeriodicCallback(lqr_frame_control!, 1/controllerFPS)
+end
+
+# ╔═╡ 4edf152c-e6bb-408c-9798-88a89390a2be
+begin
+	ObserverHistory = Vector{Vector{Float64}}() #for book keeping
+	function adr_frame_control!(integrator)
+
+		#since most of the system is already known, we can implement f_known
+		#after observation of the ESO, f_known does not need to be calculated yet
+		p = integrator.p #should be an p_adrc tuple
+		mu = integrator.u
+		ctx = p.mLastFrame.context
+		dt = ctx[end] == 0.0 ? 0.0 : abs(p.mLastFrame.context[1] - integrator.t)
+		
+		sθ, cθ = sin(deg2rad(nutationAngleToHold)), cos(deg2rad(nutationAngleToHold))
+		
+		ωC_vec = p.ωC #controller frequency
+		ωO = p.ωO #observer frequency
+		kP_Prec = p.kP_Precession #Gain on the Precession channel
+		kP_wheel = p.kP_WheelGain #Gain on the wheel channel
+		phys = p.Physics
+		B0 = LinearAlgebra.Diagonal([-phys.J_s/phys.I_T,
+		                             -phys.J_s/phys.I_T,
+		                             -phys.J_s/phys.I_A]) #this is a known gain from input capital omega to body velocity output
+
+		#simulate measurements
+		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
+		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7] #this orientation is not capable of being measured and must be converted to the gravity vector
+		
+		Γ_i = 2*(q1*q3 - q0*q2)
+		Γ_j = 2*(q2*q3 + q0*q1)
+		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
+		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
+
+		sens = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
+
+		#build reference from real data rather than tangent basis transform.
+		κ = p.MomentumBudget
+		H_crit = 2*sqrt(phys.I_T * phys.M_total * phys.g * phys.r_cm * cθ) #discriminant
+		Hγ = κ*H_crit
+		
+		prec_rate = (Hγ - sqrt(Hγ^2 - 4*phys.I_T*phys.M_total*phys.g*phys.r_cm*cθ))/(2*phys.I_T*cθ)
+
+		Γref = [sθ, 0.0, cθ]
+		ωref = prec_rate .* Γref
+		uref = [0.0,0.0,(Hγ - phys.I_A*prec_rate*cθ) / phys.J_s]
+		
+		# ESO model
+		if ctx[11] == 0.0
+			ctx[2:4] .= [ω_i,ω_j,ω_γ]
+			ctx[5:7] .= [0.0,0.0,0.0]
+			ctx[8:10] .= [Ω_i, Ω_j, Ω_γ]
+			ctx[11] = 1 #true that the ESO/context has been initialized
+		end
+		#assign and build disturbance
+		z1 = ctx[2:4] #angular rate
+		z2 = ctx[5:7] #acceleration
+		Ω_prev = dt == 0.0 ? zeros(3) : ([Ω_i,Ω_j,Ω_γ] .- ctx[8:10]) ./ dt
+		
+		Im = LinearAlgebra.Diagonal([phys.I_T, phys.I_T, phys.I_A])
+		Β = LinearAlgebra.Diagonal([phys.b_perp,phys.b_perp,phys.b_axial])
+		#known disturbance is helpful "gyroscopic stiffness" which shouldnt be canceled
+		fk = Im \ (-LinearAlgebra.cross(z1, Im*z1 .+ phys.J_s .* [Ω_i,Ω_j,Ω_γ]) .- Β*z1 .+ phys.M_total*phys.g*phys.r_cm .* LinearAlgebra.cross([Γ_i,Γ_j,Γ_γ],[0.0,0.0,1.0])) 
+		
+		errorObserved = [ω_i,ω_j,ω_γ] .- z1
+		z1 .+= dt .* (fk .+ z2 .+ B0*Ω_prev .+ (2*ωO) .* errorObserved)
+		z2 .+= dt .* ((ωO.^2) .* errorObserved)
+
+		#T = TangentBasis([Γ_i,Γ_j,Γ_γ])
+		#η = T' * (Γref .- [Γ_i,Γ_j,Γ_γ])
+		eΓ = [Γ_i,Γ_j,Γ_γ] .- Γref
+		ωcmd = ωref .+ kP_Prec .* LinearAlgebra.cross([Γ_i,Γ_j,Γ_γ], eΓ)
+		Kp = LinearAlgebra.Diagonal(ωC_vec)
+		u0 = Kp * (ωcmd .- [ω_i,ω_j,ω_γ])
+
+		u_momentum = kP_wheel .* ([Ω_i,Ω_j,Ω_γ] .- uref)
+
+		Ω = B0 \ (u0 .- z2) .- u_momentum #control law
+		ctx[1] = integrator.t
+		ctx[2:4] .= z1
+		ctx[5:7] .= z2
+		Ω = clamp.(Ω, -p.maxWheelAccel, p.maxWheelAccel)
+		ctx[8:10] .= [Ω_i, Ω_j, Ω_γ]
+		p.mLastFrame.du_i = Ω[1]
+		p.mLastFrame.du_j = Ω[2]
+		p.mLastFrame.du_γ = Ω[3]
+		p.mLastFrame.context .= ctx
+		push!(ObserverHistory, copy(ctx))
 	end
 	cb2 = DiffEqCallbacks.PeriodicCallback(adr_frame_control!, 1/controllerFPS)
 end
+
+# ╔═╡ ff9ca0c4-e490-4d47-9a03-18f3d104b81e
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	ObserverHistory = Vector{Vector{Float64}}() #for book keeping
+	function adr_frame_control!(integrator)
+
+		#since most of the system is already known, we can implement f_known
+		#after observation of the ESO, f_known does not need to be calculated yet
+		p = integrator.p #should be an p_adrc tuple
+		mu = integrator.u
+		ctx = p.mLastFrame.context
+		dt = ctx[end] == 0.0 ? 0.0 : abs(p.mLastFrame.context[1] - integrator.t)
+		
+		sθ, cθ = sin(deg2rad(nutationAngleToHold)), cos(deg2rad(nutationAngleToHold))
+		
+		ωC_vec = p.ωC #controller frequency
+		ωO = p.ωO #observer frequency
+		kP_Prec = p.kP_Precession #Gain on the Precession channel
+		kP_wheel = p.kP_WheelGain #Gain on the wheel channel
+		phys = p.Physics
+		B0 = LinearAlgebra.Diagonal([-phys.J_s/phys.I_T,
+		                             -phys.J_s/phys.I_T,
+		                             -phys.J_s/phys.I_A]) #this is a known gain from input capital omega to body velocity output
+
+		#simulate measurements
+		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
+		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7] #this orientation is not capable of being measured and must be converted to the gravity vector
+		
+		Γ_i = 2*(q1*q3 - q0*q2)
+		Γ_j = 2*(q2*q3 + q0*q1)
+		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
+		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
+		sens = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
+
+		eΓ_γ = cos(deg2rad(nutationAngleToHold)) - Γ_γ
+		s2ref = sin(deg2rad(nutationAngleToHold))^2
+
+		u_n = ( -kP_2*eΓ_γ - kD_2*(-hn) - Fn) / b0n
+		u_b = ( kP1*()) / b0b
+		u_γ = (kp1) / b0γ
+		
+		
+		push!(ObserverHistory, copy(ctx))
+	end
+	cb2 = DiffEqCallbacks.PeriodicCallback(adr_frame_control!, 1/controllerFPS)
+end
+  ╠═╡ =#
 
 # ╔═╡ e29f87fb-503a-4bf7-ba49-d37950c2602b
 begin
@@ -340,57 +555,144 @@ end
 
 # ╔═╡ 768d624b-44a3-4053-8318-4c2ab32a0f7d
 begin
-	nutA = deg2rad(initNutAngle)
-	tspan = (0.0, round(simTime*1000/max_fps)*max_fps/1000)
-	
-	u0 = [0.0, 0.0, 0.0, 
-		  cos(nutA/2), sin(nutA/2), 0.0, 0.0, 
-		  0.0, 0.0, 0.0,
-		  0.0, 0.0, 0.0]
-	prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_lqr)
-	sol = DifferentialEquations.solve(
-		prob, 
-		DifferentialEquations.AutoTsit5(DifferentialEquations.Rosenbrock23()), 
-		reltol=1e-6, 
-		abstol=1e-8,
-		maxiters=1e+7,
-		saveat=1/max_fps,
-		callback = cb
-	)
-	
-	timeValues = sol.t
-	wisol = [sol.u[i][1] for i in eachindex(sol)] #rad/s
-	wjsol = [sol.u[i][2] for i in eachindex(sol)]
-	wgammasol = [sol.u[i][3] for i in eachindex(sol)]
-	q0sol = [sol.u[i][4] for i in eachindex(sol)]
-	q1sol = [sol.u[i][5] for i in eachindex(sol)]
-	q2sol = [sol.u[i][6] for i in eachindex(sol)]
-	q3sol = [sol.u[i][7] for i in eachindex(sol)]
-	uisol = [sol.u[i][8] for i in eachindex(sol)]
-	ujsol = [sol.u[i][9] for i in eachindex(sol)]
-	ugammasol = [sol.u[i][10] for i in eachindex(sol)]
-	θsol = [acos(clamp(q0^2 + q3^2 - q1^2 - q2^2,-1.0, 1.0)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
-	ϕsol = [-atan(2(q1*q3+q0*q2),2(q2*q3-q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
-	γsol = [atan(2(q1*q3-q0*q2),2(q2*q3+q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	if useADRC == "adr"
+		nutA = deg2rad(initNutAngle)
+		tspan = (0.0, round(simTime*1000/max_fps)*max_fps/1000)
+		
+		u0 = [0.0, 0.0, 0.0, 
+			  cos(nutA/2), sin(nutA/2), 0.0, 0.0, 
+			  0.0, 0.0, 0.0,
+			  0.0, 0.0, 0.0]
+		prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_adrc)
+		empty!(ObserverHistory)
+		sol = DifferentialEquations.solve(
+			prob, 
+			DifferentialEquations.AutoTsit5(DifferentialEquations.Rosenbrock23()), 
+			reltol=1e-6, 
+			abstol=1e-8,
+			maxiters=1e+7,
+			saveat=1/max_fps,
+			callback = cb2
+		)
+		
+		timeValues = sol.t
+		wisol = [sol.u[i][1] for i in eachindex(sol)] #rad/s
+		wjsol = [sol.u[i][2] for i in eachindex(sol)]
+		wgammasol = [sol.u[i][3] for i in eachindex(sol)]
+		q0sol = [sol.u[i][4] for i in eachindex(sol)]
+		q1sol = [sol.u[i][5] for i in eachindex(sol)]
+		q2sol = [sol.u[i][6] for i in eachindex(sol)]
+		q3sol = [sol.u[i][7] for i in eachindex(sol)]
+		uisol = [sol.u[i][8] for i in eachindex(sol)]
+		ujsol = [sol.u[i][9] for i in eachindex(sol)]
+		ugammasol = [sol.u[i][10] for i in eachindex(sol)]
+		θsol = [acos(clamp(q0^2 + q3^2 - q1^2 - q2^2,-1.0, 1.0)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+		ϕsol = [-atan(2(q1*q3+q0*q2),2(q2*q3-q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+		γsol = [atan(2(q1*q3-q0*q2),2(q2*q3+q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	else
+		nutA = deg2rad(initNutAngle)
+		tspan = (0.0, round(simTime*1000/max_fps)*max_fps/1000)
+		
+		u0 = [0.0, 0.0, 0.0, 
+			  cos(nutA/2), sin(nutA/2), 0.0, 0.0, 
+			  0.0, 0.0, 0.0,
+			  0.0, 0.0, 0.0]
+		prob = DifferentialEquations.ODEProblem(GyrostatPhysics!, u0, tspan, p_lqr)
+		sol = DifferentialEquations.solve(
+			prob, 
+			DifferentialEquations.AutoTsit5(DifferentialEquations.Rosenbrock23()), 
+			reltol=1e-6, 
+			abstol=1e-8,
+			maxiters=1e+7,
+			saveat=1/max_fps,
+			callback = cb
+		)
+		
+		timeValues = sol.t
+		wisol = [sol.u[i][1] for i in eachindex(sol)] #rad/s
+		wjsol = [sol.u[i][2] for i in eachindex(sol)]
+		wgammasol = [sol.u[i][3] for i in eachindex(sol)]
+		q0sol = [sol.u[i][4] for i in eachindex(sol)]
+		q1sol = [sol.u[i][5] for i in eachindex(sol)]
+		q2sol = [sol.u[i][6] for i in eachindex(sol)]
+		q3sol = [sol.u[i][7] for i in eachindex(sol)]
+		uisol = [sol.u[i][8] for i in eachindex(sol)]
+		ujsol = [sol.u[i][9] for i in eachindex(sol)]
+		ugammasol = [sol.u[i][10] for i in eachindex(sol)]
+		θsol = [acos(clamp(q0^2 + q3^2 - q1^2 - q2^2,-1.0, 1.0)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+		ϕsol = [-atan(2(q1*q3+q0*q2),2(q2*q3-q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+		γsol = [atan(2(q1*q3-q0*q2),2(q2*q3+q0*q1)) for (q0,q1,q2,q3) in zip(q0sol,q1sol,q2sol,q3sol)]
+	end
 end
 
 # ╔═╡ 740dd046-59f9-419a-876d-ca0fd29624f5
 begin
 	import DataStructures
+	pc0 = Plots.plot(timeValues, [θsol], label = ["θ"], legend = :outerright, title = "θ(t), Nutation Angle (Alone)", xlabel = "time (s)", ylabel = "angle (rad)")
+	
 	pc1 = Plots.plot(timeValues, [θsol, ϕsol, γsol], label = ["θ" "ϕ" "γ"], legend = :outerright, title = "θ(t), Nutation Angle", xlabel = "time (s)", ylabel = "angle (rad)")
 	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], label = "θ_ref", color = Plots.Colors.RGBA(0,0.25,1,1), linestyle = :dash)
 	
 	pc3 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
-	Plots.plot(pc1, pc3, layout = (2,1))
+	Plots.plot(pc0, pc1, pc3, layout = (3,1), plot_title = "Hold: $nutationAngleToHold °")
 end
+
+# ╔═╡ 29da5f6a-a0b3-4876-83d1-d25d0dca07f8
+rad2deg(θsol[8000])
 
 # ╔═╡ 26e34a6e-9a92-43cd-ac9e-073a10405d0e
 begin
 	pc4 = Plots.plot(timeValues, [wisol, wjsol, wgammasol], label = ["ω_i" "ω_j" "ω_γ"],legend = :outerright, title = "ω(t), Body Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
 	pc5 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
-	Plots.plot(pc4,pc5, layout=(2,1))
+	Plots.plot(pc4,pc5, layout=(2,1),size = (700, 500), plot_title = "Hold: $nutationAngleToHold °")
 	#Plots.plot(pc4
 end
+
+# ╔═╡ 776d9a1e-5f31-4eca-829a-32f0675d72a8
+begin
+	if useADRC == "adr"
+		ESO_t     = [row[1] for row in ObserverHistory]
+		ESO_ωisol = [row[2] for row in ObserverHistory]
+		ESO_ωjsol = [row[3] for row in ObserverHistory]
+		ESO_ωγsol = [row[4] for row in ObserverHistory]
+
+		p1 = Plots.plot(timeValues, wisol, label = "ω_i", ylabel = "rad/s")
+		Plots.plot!(p1, ESO_t, ESO_ωisol, label = "ESO_i", linestyle = :dash)
+
+		p2 = Plots.plot(timeValues, wjsol, label = "ω_j", ylabel = "rad/s")
+		Plots.plot!(p2, ESO_t, ESO_ωjsol, label = "ESO_j", linestyle = :dash)
+
+		p3 = Plots.plot(timeValues, wgammasol, label = "ω_γ", ylabel = "rad/s",
+		                xlabel = "time (s)")
+		Plots.plot!(p3, ESO_t, ESO_ωγsol, label = "ESO_γ", linestyle = :dash)
+
+		Plots.plot(p1, p2, p3, layout = (3,1), size = (700, 800),
+		           legend = :outerright, plot_title = "ESO rate tracking",ylims=Plots.ylims(pc4))
+	end
+end	
+
+# ╔═╡ 0086b4eb-5fc9-4e72-a06c-8d8d3dc339cb
+begin
+	if useADRC == "adr"
+		#ESO_t     = [row[1] for row in ObserverHistory]
+		ESO_s1sol = [row[5] for row in ObserverHistory]
+		ESO_s2sol = [row[6] for row in ObserverHistory]
+		ESO_s3sol = [row[7] for row in ObserverHistory]
+
+		p4 = Plots.plot(timeValues, wisol, label = "ω_i", ylabel = "rad/s")
+		Plots.plot!(p1, ESO_t, ESO_s1sol, label = "ESO_i", linestyle = :dash)
+
+		p5 = Plots.plot(timeValues, wjsol, label = "ω_j", ylabel = "rad/s")
+		Plots.plot!(p2, ESO_t, ESO_s2sol, label = "ESO_j", linestyle = :dash)
+
+		p6 = Plots.plot(timeValues, wgammasol, label = "ω_γ", ylabel = "rad/s",
+		                xlabel = "time (s)")
+		Plots.plot!(p3, ESO_t, ESO_s3sol, label = "ESO_γ", linestyle = :dash)
+
+		Plots.plot(p1, p2, p3, layout = (3,1), size = (700, 800),
+		           legend = :outerright, plot_title = "ESO rate tracking",ylims=Plots.ylims(pc4))
+	end
+end	
 
 # ╔═╡ 1234dad7-3c75-4f40-8f80-f3601a41c891
 begin
@@ -484,8 +786,6 @@ begin
 			playbackToken[] = playbackToken[] + 1
 			mToken = playbackToken[]
 			@async begin
-				#TODO
-				#Get the current time.
 				initClockTime = time()
 				timeStart = timeValues[playbackIndex[]] #resume from current slider value
 				
@@ -518,92 +818,6 @@ begin
 	fig #show fig
 
 end
-
-# ╔═╡ f1612c4d-608c-4846-85aa-60f77bf7dd4c
-begin
-	function lqr_frame_control!(integrator)
-		p  = integrator.p
-		mu = integrator.u
-		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
-		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7]
-		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
-
-		Γ_i = 2*(q1*q3 - q0*q2)
-		Γ_j = 2*(q2*q3 + q0*q1)
-		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
-
-		sens = [ω_i, ω_j, ω_γ, Γ_i, Γ_j, Γ_γ, Ω_i, Ω_j, Ω_γ]
-
-		curAngle = acos(clamp(Γ_γ, -1, 1))
-		#get the current gain
-		K, F, T = ScheduleLookup(p.Schedule, curAngle, p.nutationTarget)
-		δx = GetAugmentedError(sens, p.referenceTarget, F, T)
-		cmd = -K*δx
-		p.mLastFrame.du_i = cmd[1]
-		p.mLastFrame.du_j = cmd[2]
-		p.mLastFrame.du_γ = cmd[3]
-	end
-	cb = DiffEqCallbacks.PeriodicCallback(lqr_frame_control!, 1/controllerFPS)
-end
-
-# ╔═╡ 73ec6f78-1263-4e2b-bdac-557919eea007
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	function lqr_frame_control!(integrator)
-		p  = integrator.p
-		mu = integrator.u
-		ω_i, ω_j, ω_γ = mu[1], mu[2], mu[3]
-		q0, q1, q2, q3 = mu[4], mu[5], mu[6], mu[7]
-		Ω_i, Ω_j, Ω_γ  = mu[8], mu[9], mu[10]
-
-		Γ_i = 2*(q1*q3 - q0*q2)
-		Γ_j = 2*(q2*q3 + q0*q1)
-		Γ_γ = q0^2 + q3^2 - q1^2 - q2^2
-		Γ   = [Γ_i, Γ_j, Γ_γ]
-		ω   = [ω_i, ω_j, ω_γ]
-		u   = [Ω_i, Ω_j, Ω_γ]
-
-		dt = 1/controllerFPS
-
-		# ---- gain + design-azimuth reference at the commanded cone ----
-		K, Χd, θc = ScheduleLookup(p.Schedule, p.mLastFrame.θ_cmd)
-		ωd, Γd, ud = Χd[1:3], Χd[4:6], Χd[7:9]
-
-		# ---- design frame at θc (meridian, azimuth, radial) ----
-		cθ, sθ = cos(θc), sin(θc)
-		t1d = [cθ, 0.0, -sθ]
-		t2d = [0.0, 1.0, 0.0]
-		Td  = hcat(t1d, t2d)
-		Fd  = hcat(t1d, t2d, [sθ, 0.0, cθ])
-
-		# ---- rotate everything to the LIVE azimuth about e_γ ----
-		h = hypot(Γ_i, Γ_j)
-		ni, nj = h > 1e-4 ? (Γ_i/h, Γ_j/h) : (1.0, 0.0)
-		Rz = [ni -nj 0.0; nj ni 0.0; 0.0 0.0 1.0]
-		ωref, Γref, uref = Rz*ωd, Rz*Γd, Rz*ud
-		F, T = Rz*Fd, Rz*Td
-
-		# ---- error and command ----
-		δx  = vcat(F'*(ω .- ωref), T'*(Γ .- Γref), u .- uref)
-		cmd = -K*δx
-		p.mLastFrame.du_i = cmd[1]
-		p.mLastFrame.du_j = cmd[2]
-		p.mLastFrame.du_γ = cmd[3]
-
-		# ---- reference governor: advance θ_cmd only if safe and feasible ----
-		η1, η2 = δx[4], δx[5]
-		H3     = p.Physics.I_A*ω_γ + p.Physics.J_s*Ω_γ
-		θ_next = min(p.mLastFrame.θ_cmd + p.θ̇_max*dt, p.θ_target)
-		ok_err = hypot(η1, η2) < p.η_freeze
-		ok_mom = H3 >= p.H_margin*gyroCond(θ_next)
-		if ok_err && ok_mom
-			p.mLastFrame.θ_cmd = θ_next
-		end
-	end
-	cb = DiffEqCallbacks.PeriodicCallback(lqr_frame_control!, 1/controllerFPS)
-end
-  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -4338,14 +4552,19 @@ version = "1.13.0+0"
 # ╠═a6076b1c-decd-4193-a395-088b6aaea767
 # ╠═bf736020-ddce-4045-bc8c-2072d4aad86c
 # ╠═c3732bc1-0b87-42e3-b8d5-a9537599550d
+# ╠═34cada1d-238e-4931-aa4c-ea8ee97717ee
 # ╠═dac310f6-3603-468a-b41d-b97dbcebca0a
-# ╠═73ec6f78-1263-4e2b-bdac-557919eea007
+# ╠═02063916-50b8-4e89-9f15-a782dce657cf
 # ╠═f1612c4d-608c-4846-85aa-60f77bf7dd4c
-# ╠═7fd4f706-5e54-4cf2-a53a-dc10fdcb4bf8
+# ╠═4edf152c-e6bb-408c-9798-88a89390a2be
+# ╟─ff9ca0c4-e490-4d47-9a03-18f3d104b81e
 # ╠═e29f87fb-503a-4bf7-ba49-d37950c2602b
 # ╠═768d624b-44a3-4053-8318-4c2ab32a0f7d
 # ╠═740dd046-59f9-419a-876d-ca0fd29624f5
+# ╠═29da5f6a-a0b3-4876-83d1-d25d0dca07f8
 # ╠═26e34a6e-9a92-43cd-ac9e-073a10405d0e
+# ╠═776d9a1e-5f31-4eca-829a-32f0675d72a8
+# ╠═0086b4eb-5fc9-4e72-a06c-8d8d3dc339cb
 # ╠═1234dad7-3c75-4f40-8f80-f3601a41c891
 # ╠═e3dffecc-a47b-4539-8ff6-ad53de12e602
 # ╟─00000000-0000-0000-0000-000000000001
