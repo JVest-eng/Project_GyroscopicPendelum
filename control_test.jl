@@ -36,9 +36,9 @@ md"""
 Rod Mass: $(@bind rodMass Slider(1:0.1:80, default=10.0, show_value=true)) g \
 Probe Mass: $(@bind probeMass Slider(1:0.1:100, default=10.0, show_value = true)) g \
 Probe Length: $(@bind probeLength Slider(0.1:0.1:3, default=3.0, show_value = true)) cm \
-Rod Length: $(@bind rodLength Slider(1:0.1:15, default=10.0, show_value = true)) cm \
+Rod Length: $(@bind rodLength Slider(1:0.1:15, default=7.5, show_value = true)) cm \
 Rod Diameter: $(@bind rodDiameter Slider(0.1:0.1:2, default=2.0, show_value = true)) cm \
-Wheel Inertia: $(@bind wheelInertia NumberField(10:0.1:500, default=140.0)) g cm^2\
+Wheel Inertia: $(@bind wheelInertia NumberField(10:0.1:500, default=80.0)) g cm^2\
 Spinning damping: $(@bind dampingSpin NumberField(0.1:0.1:50, default=2.0)) g cm\
 Transverse damping: $(@bind dampingTransverse NumberField(0.1:0.1:50, default=2.0)) g cm\
 
@@ -177,10 +177,10 @@ begin
 	#tolerated errors
 	transverseSpeedTol = 1.0 #rad/s
 	spinSpeedTol = 1.0 #rad/s
-	tiltMeridonalTol = deg2rad(0.05)
+	tiltMeridonalTol = deg2rad(7)
 	tiltAzimuthTol = deg2rad(0.05)
 	wheelSpeedTol = deg2rad(4000.0*6)
-	wheelAccel = 0.75*maxWheelAccel
+	wheelAccel = 0.9*maxWheelAccel
 	
 	function PrecomputeLQRGain(phys, nAngle)
 		A, B, Χ_ref, F, T = GenerateStateSpace(phys,nAngle)
@@ -634,7 +634,7 @@ begin
 	pc2 = Plots.hline!(pc1[1], [deg2rad(nutationAngleToHold)], label = "θ_ref", color = Plots.Colors.RGBA(0,0.25,1,1), linestyle = :dash)
 	
 	pc3 = Plots.plot(timeValues, [uisol, ujsol, ugammasol], label = ["u_i" "u_j" "u_γ"], legend = :outerright, title = "u(t), Wheel Speed", xlabel = "time (s)", ylabel = "angular velocity (rad/s)")
-	Plots.plot(pc0, pc1, pc3, layout = (3,1), plot_title = "Hold: $nutationAngleToHold °")
+	Plots.plot(pc0, pc1, pc3, layout = (3,1), plot_title = "Hold: $nutationAngleToHold °",size = (800, 700))
 end
 
 # ╔═╡ 29da5f6a-a0b3-4876-83d1-d25d0dca07f8
@@ -719,7 +719,7 @@ begin
 	end
 end
 
-# ╔═╡ e3dffecc-a47b-4539-8ff6-ad53de12e602
+# ╔═╡ 388bae57-3de3-4c67-ab24-8155cc44a327
 begin
 	m_rodLength = rodLength
 
@@ -4566,6 +4566,6 @@ version = "1.13.0+0"
 # ╠═776d9a1e-5f31-4eca-829a-32f0675d72a8
 # ╠═0086b4eb-5fc9-4e72-a06c-8d8d3dc339cb
 # ╠═1234dad7-3c75-4f40-8f80-f3601a41c891
-# ╠═e3dffecc-a47b-4539-8ff6-ad53de12e602
+# ╠═388bae57-3de3-4c67-ab24-8155cc44a327
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
