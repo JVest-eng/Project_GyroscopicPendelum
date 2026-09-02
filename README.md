@@ -161,5 +161,5 @@ $$\frac{d}{dt}\frac{\partial\mathcal{L}}{\partial\mathbf{\dot{q}_k}} - \frac{\pa
 
 For each generalized coordinate k in $q_k = [\omega\_i, \omega\_j, \omega\_\gamma, q\_0, q\_1, q\_2, q\_3]$ with holonomic constraint $\lambda(q_0^2 + q_1^2 + q_2^2 + q_3^2) - 1$.
 
-Eliminating the lagrangian involves determining the relationship between quaternions and angular velocity via the intuition built by the kinematic transport theorem and small angle approximations.
+Eliminating the holonomic constraint involves determining the relationship between quaternions and angular velocity via the intuition built by the kinematic transport theorem and small angle approximations and solving the Differential Algebraic Equation.
 
