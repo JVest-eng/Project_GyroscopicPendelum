@@ -86,6 +86,35 @@ Combining $T_{wheels}$ with $T_{body}$:
 
 $$T = \frac{1}{2}\left(I_p + J_s\right)(\omega_i^2 + \omega_j^2) + \frac{1}{2}\left(I_a + J_s\right)\omega_\gamma^2+\frac{1}{2}J_s\sum_{k}\left(\Omega_k^2 + 2\omega_k\Omega_k\right)$$
 
-Using the axisymmetric identity of $\omega_i$ and $\omega_j$:
+### 4. Quaternions
+Quaternions are essentially 4-dimensional complex numbers — in other words, they can be though of as an extension of the standard complex number space $\mathbb{C}$. The standard complex number of $z = \alpha + \beta i$ is a 2-dimensional complex number for reference. Rotations in the 2D-plane are done by multiplying some vector, v, by $z\left(\theta\right) = \cos{\frac{\theta}{2}}+\sin{\frac{\theta}{2}}i$ and the conjugate of z. The quaternion is denoted by: 
 
-$$T = \frac{1}{2}I_T(\dot{\theta}^2+\dot\phi^2 {s_\theta}^2) + \frac{1}{2}I_A\left({\dot{\gamma}^2+2\dot{\gamma}\dot{\phi} c_\theta}+{\dot\phi}^2 {c_\theta}^2\right)+\frac{1}{2}J_s\sum_{k}\left(\Omega_k^2 + 2\omega_k\Omega_k\right)$$
+$$\boldsymbol{q} = q_0 + q_1 \boldsymbol{i} + q_2 \boldsymbol{j} + q_3 \boldsymbol{k}$$
+
+Similar to complex numbers, any vector in three dimensions can be rotated by sandwiching the quaternion q with is conjugate. The form is given as:
+
+$$\boldsymbol{\hat v}' = \boldsymbol{q}\hat v\boldsymbol{q}'$$
+
+Taking the fixed direction vectors $\{ \hat{e}_x,\hat{e}_y, \hat{e}_z \}$ for v and applying the quaternion sandwich product yields the rotation matrix for fixed v to body v'.
+
+$$\hat{e}\_x = (q_0^2 + q_1^2 -q_2^2 - q_3^2)\hat{e}\_i + 2(q_1 q_2 - q_0 q_3) \hat{e}\_j + 2(q_1 q_3 + q_0 q_2) \hat{e}_\gamma$$
+
+$$\hat{e}\_y = 2(q_1 q_2 + q_0 q_3) \hat{e}\_i + (q_0^2 - q_1^2 + q_2^2 - q_3^2) \hat{e}\_j + 2(q_2 q_3 - q_0 q_1) \hat{e}\_\gamma$$
+
+$$\hat{e}\_z = 2(q_1 q_3 - q_0 q_2) \hat{e}\_i + 2(q_2 q_3 + q_0 q_1)\hat{e}\_j +  (q_0^2 - q_1^2 - q_2^2 + q_3^2) \hat{e}\_\gamma$$
+
+Quaternions do not suffer from gimbal lock. For this reason they are used in many applications of 3d rotation from simulation to animation and are used for system modelling over the Euler angle formulation.
+
+Geometric algebra offers a more intuitive approach to quaternions by replacing the 4-dimensional vector described as a scalar with 3 vectors i, j, k to a scalar plus a binormal vector. The quaternion rotation then becomes a pair of reflections through 3d space and I highly recommend reading up on it to develop a mental picture of what is happening during a quaternion transformation.
+
+### 5. The Kinematic Transport Theorem
+For a rotating body, the observed momentum of said body is not simply the body's momentum, as this body may be undergoing a rotation about some axis. The simplest way to approach this problem is by comparing the changing apparent position of a particle when viewed from the fixed frame coordinate.
+
+$\frac{d\boldsymbol{\hat{r}}}{dt}=\frac{d\boldsymbol{\hat{r}}}{dt}\vert_{B}+\omega \times \boldsymbol{\hat{r}}$
+
+The body moves with some velocity given by $\frac{dr}{dt}$ but there is also a contribution from any rotation that the frame is undergoing. In other words, an observer within a rotating frame only sees a point on the body going at some velocity $\frac{dr}{dt}\vert_{B}$, while there is a contribution from $\omega \times \boldsymbol{\hat{r}}$ to someone in a frame unmoving relative to the rotating frame. 
+
+Angles are defined by an orthonormal basis set that characterizes direction of rotation as with body frame $\mathbf{\hat{F}\_B}$ and fixed frame $\mathbf{\hat{F}\_O}$. The orthonormal basis must live on the surface of a sphere otherwise they would render invalid the normal magnitude condition of orthonormality. Secondly, this orthonormal basis must be orthogonal to one another. This means that all changes to the basis must be tangential.
+
+### 6. The Gravity Vector
+
