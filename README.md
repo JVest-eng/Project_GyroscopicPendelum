@@ -103,7 +103,13 @@ $$\hat{e}\_y = 2(q_1 q_2 + q_0 q_3) \hat{e}\_i + (q_0^2 - q_1^2 + q_2^2 - q_3^2)
 
 $$\hat{e}\_z = 2(q_1 q_3 - q_0 q_2) \hat{e}\_i + 2(q_2 q_3 + q_0 q_1)\hat{e}\_j +  (q_0^2 - q_1^2 - q_2^2 + q_3^2) \hat{e}\_\gamma$$
 
-Quaternions do not suffer from gimbal lock. For this reason they are used in many applications of 3d rotation from simulation to animation and are used for system modelling over the Euler angle formulation.
+Quaternions do not suffer from gimbal lock. For this reason they are used in many applications of 3d rotation from simulation to animation and are used for system modelling over the Euler angle formulation. It is also important to constrain the 4 numbers as:
+
+$$ q_0^2 + q_1^2 + q_2^2 + q_3^2 = 1 $$
+
+This defines the quaternions as only rotating the body, not subject it to any other distortion such as stretching or shrinking. By switching from Euler angles to quaternions and from fixed to body, a new set of generalized coordinates is necessary.
+
+$$\mathbf{q} = [\omega\_i, \omega\_j, \omega\_\gamma, q\_0, q\_1, q\_2, q\_3]$$
 
 Geometric algebra offers a more intuitive approach to quaternions by replacing the 4-dimensional vector described as a scalar with 3 vectors i, j, k to a scalar plus a binormal vector. The quaternion rotation then becomes a pair of reflections through 3d space and I highly recommend reading up on it to develop a mental picture of what is happening during a quaternion transformation.
 
@@ -114,7 +120,46 @@ $\frac{d\boldsymbol{\hat{r}}}{dt}=\frac{d\boldsymbol{\hat{r}}}{dt}\vert_{B}+\ome
 
 The body moves with some velocity given by $\frac{dr}{dt}$ but there is also a contribution from any rotation that the frame is undergoing. In other words, an observer within a rotating frame only sees a point on the body going at some velocity $\frac{dr}{dt}\vert_{B}$, while there is a contribution from $\omega \times \boldsymbol{\hat{r}}$ to someone in a frame unmoving relative to the rotating frame. 
 
-Angles are defined by an orthonormal basis set that characterizes direction of rotation as with body frame $\mathbf{\hat{F}\_B}$ and fixed frame $\mathbf{\hat{F}\_O}$. The orthonormal basis must live on the surface of a sphere otherwise they would render invalid the normal magnitude condition of orthonormality. Secondly, this orthonormal basis must be orthogonal to one another. This means that all changes to the basis must be tangential.
+Angles are defined by an orthonormal basis set that characterizes direction of rotation as with body frame $\mathbf{\hat{F}\_B}$ and fixed frame $\mathbf{\hat{F}\_O}$. The orthonormal basis must live on the surface of a sphere otherwise they would render invalid the normal magnitude condition of orthonormality. Secondly, this orthonormal basis must be orthogonal to one another. This means that all changes to the basis must be tangential. This is important when differentiating linearly independent basis vectors that make an orthonormal set like the gravity vector or the quaternion defining rotation.
 
-### 6. The Gravity Vector
+### 6. The Potential Energy & The Gravity Vector
+The potential energy of the system is simply given as:
+
+$$ V = M g r_{cm} \cos\left(\theta \right) $$
+
+Where M is the total system mass, g is the acceleration due to gravity, and $r_cm$ is the shortest distance between the pivot and center of mass. At $\theta$ = 0, the system has maximum potential energy and the rod assembly is standing vertical at its only unstable equilibrium point.
+
+Section 4 established the necessity of quaternions to avoid gimbal lock. When $\theta$ = 0, the system loses a degree of precision.
+
+$$\hat{e}\_x = (c\_\phi c_\gamma - s_\phi s_\gamma)\hat{e}\_i - (c\_\phi s\_\gamma + s_\phi c_\gamma) \hat{e}\_j $$
+
+$$\hat{e}\_y = (s_\phi c_\gamma + c_\phi s_\gamma)\hat{e}\_i + (c_\phi c_\gamma - s_\phi s\_\gamma) \hat{e}\_j $$
+
+$$\hat{e}\_z = \hat{e}\_\gamma$$
+
+By the sum of angles trigonometric identity, you can show that the formulation establishes a system where it is impossible to derive information about $\phi$ or $\gamma$ and that the rotation becomes a single Z rotation around $Z(\phi + \gamma)$.
+
+A particularly useful identity emerges from overlapping the ZXZ transformation with the quaternion rotation matrix:
+
+$$cos(\theta) = q_0^2 - q_1^2 - q_2^2 + q_3^2$$
+
+$$\text{Therefore}$$
+
+$$ V = M g r_{cm} \left(q_0^2 - q_1^2 - q_2^2 + q_3^2\right) $$
+
+Expressing gravity in the body frame is as simple as taking the unit vector $\hat v = e\_z$ and performing the sandwich product for qvq'. Doing so reveals that the direction gravity points relative to the body is the third column of the rotation matrix. This is important as gravity can therefore be used to determine orientation by mounting an Inertial Measurement Unit (IMU) stack onto the probe attachment of the rod assembly.
+
+This gravity vector is defined as $\hat\Gamma$ and inherits the quaternion constraint $\lVert\hat \Gamma \rVert = 1$
+
+### 7. The Lagrangian
+
+With T and V defined, the lagrangian can be used to find the forces of the system.
+
+$$\mathcal{L} = T - V$$
+
+$$\frac{d}{dt}\frac{\partial\mathcal{L}}{\partial\mathbf{\dot{q}_k}} - \frac{\partial\mathcal{L}}{\partial \mathbf{q_k}} = Q_k$$
+
+For each generalized coordinate k in $q_k = [\omega\_i, \omega\_j, \omega\_\gamma, q\_0, q\_1, q\_2, q\_3]$ with holonomic constraint $\lambda(q_0^2 + q_1^2 + q_2^2 + q_3^2) - 1$.
+
+Eliminating the lagrangian involves determining the relationship between quaternions and angular velocity via the intuition built by the kinematic transport theorem and small angle approximations.
 
