@@ -84,10 +84,10 @@ $$T_{wheels} = \frac{1}{2}J_s\left(\omega_i^2 + \omega_j^2 + \omega_\gamma^2 + \
 
 Combining $T_{wheels}$ with $T_{body}$:
 
-$$T = \frac{1}{2}\left(I_p + J_s\right)(\omega_i^2 + \omega_j^2) + \frac{1}{2}\left(I_a + J_s\right)\omega_\gamma^2+\frac{1}{2}J_s\sum_{k}\left(\Omega_k^2 + 2\omega_k\Omega_k\right)$$
+$$T = \frac{1}{2}\left(I_T\right)(\omega_i^2 + \omega_j^2) + \frac{1}{2}\left(I_A\right)\omega_\gamma^2+\frac{1}{2}J_s\sum_{k}\left(\Omega_k^2 + 2\omega_k\Omega_k\right)$$
 
 ### 4. Quaternions
-Quaternions are essentially 4-dimensional complex numbers — in other words, they can be though of as an extension of the standard complex number space $\mathbb{C}$. The standard complex number of $z = \alpha + \beta i$ is a 2-dimensional complex number for reference. Rotations in the 2D-plane are done by multiplying some vector, v, by $z\left(\theta\right) = \cos{\frac{\theta}{2}}+\sin{\frac{\theta}{2}}i$ and the conjugate of z. The quaternion is denoted by: 
+Quaternions can be thought of as an extension of the standard complex number space $\mathbb{C}$. The standard complex number of $z = \alpha + \beta i$ is a 2-dimensional complex number for reference. Rotations in the 2D-plane can therefore be done by multiplying some vector, v, by $z\left(\theta\right) = \cos{\frac{\theta}{2}}+\sin{\frac{\theta}{2}}i$ and the conjugate of z. The quaternion is denoted by: 
 
 $$\boldsymbol{q} = q_0 + q_1 \boldsymbol{i} + q_2 \boldsymbol{j} + q_3 \boldsymbol{k}$$
 
@@ -162,4 +162,6 @@ $$\frac{d}{dt}\frac{\partial\mathcal{L}}{\partial\mathbf{\dot{q}_k}} - \frac{\pa
 For each generalized coordinate k in $q_k = [\omega\_i, \omega\_j, \omega\_\gamma, q\_0, q\_1, q\_2, q\_3]$ with holonomic constraint $\lambda(q_0^2 + q_1^2 + q_2^2 + q_3^2) - 1$.
 
 Eliminating the holonomic constraint involves determining the relationship between quaternions and angular velocity via the intuition built by the kinematic transport theorem and small angle approximations and solving the Differential Algebraic Equation.
+
+
 
