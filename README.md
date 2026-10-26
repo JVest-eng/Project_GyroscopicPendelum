@@ -161,7 +161,10 @@ $$\frac{d}{dt}\frac{\partial\mathcal{L}}{\partial\mathbf{\dot{q}_k}} - \frac{\pa
 
 For each generalized coordinate k in $q_k = [\omega\_i, \omega\_j, \omega\_\gamma, q\_0, q\_1, q\_2, q\_3]$ with holonomic constraint $\lambda(q_0^2 + q_1^2 + q_2^2 + q_3^2) - 1$.
 
-Eliminating the holonomic constraint involves determining the relationship between quaternions and angular velocity via the intuition built by the kinematic transport theorem and small angle approximations and solving the Differential Algebraic Equation.
+Using the kinematic transport theorem and infinitesimal rotation approximations, the exact differential relationship between angular velocity and quaternion orientation can be derived. This relationship preserves the unit-quaternion constraint analytically, allowing the rotational dynamics to be expressed as an ordinary differential equation rather than enforcing the constraint through a differential-algebraic formulation.
+
+
+
 
 
 
